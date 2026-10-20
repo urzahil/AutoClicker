@@ -6,7 +6,6 @@ A global hotkey (F6 by default, changeable) starts/stops clicking, even when the
 window is not focused.
 """
 import ctypes
-import heapq
 import json
 import os
 import random
@@ -104,23 +103,42 @@ class Clicker(threading.Thread):
 
     def __init__(self, points, on_stop):
         super().__init__(daemon=True)
-        self.points = [ClickPoint(**asdict(p)) for p in points if p.enabled]
+        # References, not copies, so toggling `enabled` takes effect while running
+        # (call notify_changed() afterwards). Other edits are locked while running.
+        self.points = list(points)
         self.stop_event = threading.Event()
+        self.wake = threading.Event()
         self.on_stop = on_stop
 
+    def stop(self):
+        self.stop_event.set()
+        self.wake.set()
+
+    def notify_changed(self):
+        self.wake.set()
+
     def run(self):
-        start = time.perf_counter() + 0.5
-        heap = [(start, i) for i in range(len(self.points))]
-        heapq.heapify(heap)
-        while heap and not self.stop_event.is_set():
-            due, i = heap[0]
-            wait = due - time.perf_counter()
-            if wait > 0:
-                if self.stop_event.wait(wait):
-                    break
-            p = self.points[i]
+        inf = float("inf")
+        t0 = time.perf_counter()
+        due = [0.5 if p.enabled else inf for p in self.points]
+        while not self.stop_event.is_set():
+            self.wake.clear()
+            now = time.perf_counter() - t0
+            for i, p in enumerate(self.points):  # pick up enable/disable changes
+                if not p.enabled:
+                    due[i] = inf
+                elif due[i] == inf:
+                    due[i] = now + 0.2
+            nxt = min(range(len(due)), key=due.__getitem__) if due else None
+            timeout = None
+            if nxt is not None and due[nxt] != inf:
+                timeout = max(due[nxt] - now, 0)
+            if timeout is None or timeout > 0:
+                self.wake.wait(timeout)
+                continue  # woke up early, or the enabled set changed: re-evaluate
+            p = self.points[nxt]
             click(p.x, p.y, p.button, p.click_type == "Double")
-            heapq.heapreplace(heap, (time.perf_counter() + p.next_delay(), i))
+            due[nxt] = time.perf_counter() - t0 + p.next_delay()
         self.on_stop()
 
 
@@ -300,7 +318,8 @@ class App(tk.Tk):
         self.hotkey_btn = ttk.Button(top, command=self._capture_hotkey)
         self.hotkey_btn.pack(side="left")
         ttk.Button(top, text="Save…", command=self._save).pack(side="right")
-        ttk.Button(top, text="Load…", command=self._load).pack(side="right", padx=4)
+        self.load_btn = ttk.Button(top, text="Load…", command=self._load)
+        self.load_btn.pack(side="right", padx=4)
 
         cols = ("#", "On", "X", "Y", "Button", "Type", "Interval", "± Offset (ms)")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=9,
@@ -404,17 +423,17 @@ class App(tk.Tk):
             self._refresh(i + d)
 
     def _toggle_enabled(self, _=None):
-        if self.runner:
-            return
         i = self._selected()
         if i is not None:
             self.points[i].enabled = not self.points[i].enabled
             self._refresh(i)
+            if self.runner:
+                self.runner.notify_changed()  # takes effect immediately while running
 
     # ---- run control
     def toggle(self):
         if self.runner:
-            self.runner.stop_event.set()
+            self.runner.stop()
             return
         if not any(p.enabled for p in self.points):
             messagebox.showinfo("Nothing to do", "Add or enable at least one point.")
@@ -433,7 +452,8 @@ class App(tk.Tk):
 
     def _lock(self, locked):
         self.form.set_locked(locked)
-        for b in self.list_buttons:
+        # loading replaces the list, so lock it while running too
+        for b in self.list_buttons + [self.load_btn]:
             b.state(["disabled"] if locked else ["!disabled"])
 
     def _update_hotkey_labels(self):
@@ -499,7 +519,7 @@ class App(tk.Tk):
 
     def _close(self):
         if self.runner:
-            self.runner.stop_event.set()
+            self.runner.stop()
         self.destroy()
 
 
