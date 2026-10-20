@@ -246,6 +246,12 @@ class EditDialog(tk.Toplevel):
         ttk.Button(bar, text="Cancel", command=self.destroy).pack(side="right")
         ttk.Button(bar, text="OK", command=self._ok).pack(side="right", padx=4)
         self.bind("<Escape>", lambda e: self.destroy())
+        self.withdraw()  # position while hidden to avoid a flash at the top-left
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_reqwidth()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_reqheight()) // 2
+        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        self.deiconify()
         self.grab_set()
 
     def _ok(self):
