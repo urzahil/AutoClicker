@@ -92,6 +92,7 @@ namespace AutoClicker
             hotkeyBtn.Text = "Change hotkey…";
             hotkeyBtn.Click += delegate { BeginCapture(); };
             var load = new Button { Text = "Load…", AutoSize = true };
+            listButtons.Add(load); // loading replaces the list, so lock it while running
             var save = new Button { Text = "Save…", AutoSize = true };
             load.Click += delegate { LoadFile(); };
             save.Click += delegate { SaveFile(); };
@@ -260,9 +261,10 @@ namespace AutoClicker
         void ToggleEnabled()
         {
             int i = Selected;
-            if (i < 0 || runner != null) return;
+            if (i < 0) return;
             points[i].Enabled = !points[i].Enabled;
             RefreshList(i);
+            if (runner != null) runner.NotifyChanged(); // takes effect immediately while running
         }
 
         // ----------------------------------------------------------- run control

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -50,13 +50,18 @@ namespace AutoClicker
     {
         readonly List<ClickPoint> points = new List<ClickPoint>();
         readonly ManualResetEvent stop = new ManualResetEvent(false);
+        readonly AutoResetEvent changed = new AutoResetEvent(false);
         readonly Action onStopped;
         readonly Thread thread;
         readonly Random rnd = new Random();
 
+        /// <summary>
+        /// Keeps references to the points (not copies) so toggling Enabled takes effect while
+        /// running; call NotifyChanged() after toggling. Other edits are locked while running.
+        /// </summary>
         public Clicker(IEnumerable<ClickPoint> source, Action onStopped)
         {
-            foreach (var p in source) if (p.Enabled) points.Add(p.Clone());
+            points.AddRange(source);
             this.onStopped = onStopped;
             thread = new Thread(Run);
             thread.IsBackground = true;
@@ -64,23 +69,40 @@ namespace AutoClicker
 
         public void Start() { thread.Start(); }
         public void Stop() { stop.Set(); }
+        public void NotifyChanged() { changed.Set(); }
 
         void Run()
         {
             var sw = Stopwatch.StartNew();
             var due = new double[points.Count];
-            for (int i = 0; i < due.Length; i++) due[i] = 0.5;
+            for (int i = 0; i < due.Length; i++)
+                due[i] = points[i].Enabled ? 0.5 : double.PositiveInfinity;
+            var handles = new WaitHandle[] { stop, changed };
 
-            while (due.Length > 0 && !stop.WaitOne(0))
+            while (!stop.WaitOne(0))
             {
+                // pick up points that were enabled/disabled since the last pass
+                double now = sw.Elapsed.TotalSeconds;
+                for (int i = 0; i < due.Length; i++)
+                {
+                    if (!points[i].Enabled) due[i] = double.PositiveInfinity;
+                    else if (double.IsPositiveInfinity(due[i])) due[i] = now + 0.2;
+                }
+
                 int next = 0;
                 for (int i = 1; i < due.Length; i++) if (due[i] < due[next]) next = i;
 
-                double wait = due[next] - sw.Elapsed.TotalSeconds;
-                if (wait > 0)
+                int timeout = Timeout.Infinite;
+                if (due.Length > 0 && !double.IsPositiveInfinity(due[next]))
                 {
-                    if (stop.WaitOne((int)Math.Ceiling(wait * 1000))) break;
-                    continue; // re-check: woke up early or another point is now first
+                    double wait = due[next] - now;
+                    if (wait <= 0) timeout = 0;
+                    else timeout = (int)Math.Ceiling(wait * 1000);
+                }
+                if (timeout != 0)
+                {
+                    if (WaitHandle.WaitAny(handles, timeout) == 0) break;
+                    continue; // woke up early, or the enabled set changed: re-evaluate
                 }
 
                 var p = points[next];
@@ -89,7 +111,6 @@ namespace AutoClicker
             }
             onStopped();
         }
-
         static void Click(ClickPoint p)
         {
             uint down, up;
