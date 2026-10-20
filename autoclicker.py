@@ -1,4 +1,4 @@
-﻿"""Multi-point autoclicker for Windows. No dependencies (Python 3 + tkinter).
+"""Multi-point autoclicker for Windows. No dependencies (Python 3 + tkinter).
 
 Each point has its own location, interval, random offset, mouse button and
 click type. After every click the next delay is  interval + uniform(-offset, +offset).
@@ -53,6 +53,12 @@ def click(x, y, button, double):
         user32.mouse_event(up, 0, 0, 0, 0)
         if double:
             time.sleep(0.02)
+
+
+def fmt_interval(ms):
+    mins, rest = divmod(ms, 60000)
+    secs, ms = divmod(rest, 1000)
+    return " ".join(f"{v}{u}" for v, u in ((mins, "m"), (secs, "s"), (ms, "ms")) if v) or "0ms"
 
 
 # ------------------------------------------------------------------ Model ---
@@ -120,10 +126,10 @@ class App(tk.Tk):
         self.start_btn.pack(side="left")
         self.status = ttk.Label(top, text="Stopped")
         self.status.pack(side="left", padx=12)
-        ttk.Button(top, text="Saveâ€¦", command=self._save).pack(side="right")
-        ttk.Button(top, text="Loadâ€¦", command=self._load).pack(side="right", padx=4)
+        ttk.Button(top, text="Save…", command=self._save).pack(side="right")
+        ttk.Button(top, text="Load…", command=self._load).pack(side="right", padx=4)
 
-        cols = ("#", "On", "X", "Y", "Button", "Type", "Interval (ms)", "Â± Offset (ms)")
+        cols = ("#", "On", "X", "Y", "Button", "Type", "Interval", "± Offset (ms)")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", height=9,
                                  selectmode="browse")
         for c, w in zip(cols, (35, 40, 70, 70, 80, 80, 110, 110)):
@@ -138,7 +144,8 @@ class App(tk.Tk):
         ed.pack(fill="x", padx=8, pady=8)
         self.v = {
             "x": tk.StringVar(), "y": tk.StringVar(),
-            "interval": tk.StringVar(), "offset": tk.StringVar(),
+            "min": tk.StringVar(), "sec": tk.StringVar(), "ms": tk.StringVar(),
+            "offset": tk.StringVar(),
             "button": tk.StringVar(), "type": tk.StringVar(),
         }
         def entry(label, key, r, c):
@@ -152,9 +159,21 @@ class App(tk.Tk):
             cb.grid(row=r, column=c * 2 + 1, sticky="w")
             return cb
 
+        def interval_fields(r, c):
+            ttk.Label(ed, text="Interval").grid(row=r, column=c * 2, sticky="e", padx=(8, 4), pady=3)
+            fr = ttk.Frame(ed)
+            fr.grid(row=r, column=c * 2 + 1, sticky="w")
+            es = []
+            for key, unit in (("min", "min"), ("sec", "s"), ("ms", "ms")):
+                e = ttk.Entry(fr, textvariable=self.v[key], width=4)
+                e.pack(side="left")
+                ttk.Label(fr, text=unit).pack(side="left", padx=(2, 6))
+                es.append(e)
+            return es
+
         self.editors = [
             entry("X", "x", 0, 0), entry("Y", "y", 0, 1),
-            entry("Interval (ms)", "interval", 1, 0), entry("Â± Random offset (ms)", "offset", 1, 1),
+            *interval_fields(1, 0), entry("± Random offset (ms)", "offset", 1, 1),
             combo("Button", "button", list(EVENTS), 0, 2),
             combo("Click type", "type", ["Single", "Double"], 1, 2),
         ]
@@ -185,8 +204,8 @@ class App(tk.Tk):
         self.tree.delete(*self.tree.get_children())
         for i, p in enumerate(self.points):
             self.tree.insert("", "end", iid=str(i), values=(
-                i + 1, "âœ”" if p.enabled else "â€”", p.x, p.y, p.button,
-                p.click_type, p.interval_ms, p.offset_ms))
+                i + 1, "✔" if p.enabled else "—", p.x, p.y, p.button,
+                p.click_type, fmt_interval(p.interval_ms), p.offset_ms))
         if select is not None and 0 <= select < len(self.points):
             self.tree.selection_set(str(select))
 
@@ -196,7 +215,10 @@ class App(tk.Tk):
             return
         p = self.points[i]
         self.v["x"].set(p.x); self.v["y"].set(p.y)
-        self.v["interval"].set(p.interval_ms); self.v["offset"].set(p.offset_ms)
+        mins, rest = divmod(p.interval_ms, 60000)
+        secs, ms = divmod(rest, 1000)
+        self.v["min"].set(mins); self.v["sec"].set(secs); self.v["ms"].set(ms)
+        self.v["offset"].set(p.offset_ms)
         self.v["button"].set(p.button); self.v["type"].set(p.click_type)
 
     def _add_point(self):
@@ -236,12 +258,14 @@ class App(tk.Tk):
             return
         try:
             x, y = int(self.v["x"].get()), int(self.v["y"].get())
-            interval, offset = int(self.v["interval"].get()), int(self.v["offset"].get())
-            if interval < 1 or offset < 0:
+            mins, secs, ms = (int(self.v[k].get() or 0) for k in ("min", "sec", "ms"))
+            offset = int(self.v["offset"].get() or 0)
+            interval = (mins * 60 + secs) * 1000 + ms
+            if min(mins, secs, ms) < 0 or interval < 1 or offset < 0:
                 raise ValueError
         except ValueError:
             messagebox.showerror("Invalid value", "X, Y, interval and offset must be whole "
-                                 "numbers (interval â‰¥ 1, offset â‰¥ 0).")
+                                 "numbers (interval at least 1 ms, offset ≥ 0).")
             return
         p = self.points[i]
         p.x, p.y, p.interval_ms, p.offset_ms = x, y, interval, offset
@@ -284,7 +308,7 @@ class App(tk.Tk):
         self.runner = Clicker(self.points, lambda: self.after(0, self._stopped))
         self.runner.start()
         self.start_btn.config(text="Stop (F6)")
-        self.status.config(text="Runningâ€¦")
+        self.status.config(text="Running…")
         self._lock(True)
 
     def _stopped(self):

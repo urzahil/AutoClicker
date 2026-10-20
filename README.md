@@ -1,4 +1,4 @@
-﻿# AutoClicker
+# AutoClicker
 
 A simple multi-point autoclicker for Windows, written in Python with no dependencies (tkinter + ctypes).
 
@@ -7,7 +7,7 @@ A simple multi-point autoclicker for Windows, written in Python with no dependen
 Add as many click points as you like. Each point is configured independently:
 
 - **Location** – X/Y screen coordinates, or press **Pick location** and left-click anywhere on screen (Esc cancels)
-- **Interval** – time between clicks, in milliseconds
+- **Interval** – time between clicks, set in minutes, seconds and milliseconds
 - **Random offset** – ± milliseconds, re-rolled after every click (next delay = interval + random(−offset, +offset))
 - **Mouse button** – left, right or middle
 - **Click type** – single or double
