@@ -15,7 +15,7 @@ Add as many click points as you like. Each point is configured independently:
 Other things:
 
 - Press **F6** to start/stop, even when the window isn't focused
-- Enable/disable points by double-clicking a row; duplicate, remove and reorder points
+- Set up a point in the "New point" panel and click **Add point**; right-click a point to edit, duplicate, remove or reorder it, and double-click it to enable/disable
 - Save and load your setup as JSON
 
 ## Usage

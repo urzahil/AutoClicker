@@ -103,6 +103,142 @@ class Clicker(threading.Thread):
 
 
 # --------------------------------------------------------------------- UI ---
+def pick_location(parent, callback):
+    """Cover all screens with a faint overlay; the next left click picks the spot."""
+    gm = user32.GetSystemMetrics
+    vx, vy, vw, vh = gm(76), gm(77), gm(78), gm(79)  # virtual screen
+    ov = tk.Toplevel(parent)
+    ov.overrideredirect(True)
+    ov.geometry(f"{vw}x{vh}{vx:+d}{vy:+d}")
+    ov.attributes("-topmost", True)
+    ov.attributes("-alpha", 0.25)
+    ov.configure(bg="black", cursor="crosshair")
+    tk.Label(ov, text="Left-click to pick a location  (Esc to cancel)",
+             fg="white", bg="black", font=("Segoe UI", 18)).place(relx=0.5, rely=0.1,
+                                                                  anchor="center")
+
+    def done(pick):
+        ov.destroy()
+        if pick:
+            callback(*cursor_pos())
+
+    ov.bind("<Button-1>", lambda e: done(True))
+    ov.bind("<Escape>", lambda e: done(False))
+    ov.focus_force()
+
+
+class PointForm(ttk.Frame):
+    """Editor fields for one point; used for the 'new point' panel and the edit dialog."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.v = {k: tk.StringVar() for k in
+                  ("x", "y", "min", "sec", "offset", "button", "type")}
+
+        def label(text, r, c):
+            ttk.Label(self, text=text).grid(row=r, column=c * 2, sticky="e", padx=(8, 4), pady=3)
+
+        def fields(text, r, c, parts):
+            """Row of entries; parts are (prefix, key, suffix)."""
+            label(text, r, c)
+            fr = ttk.Frame(self)
+            fr.grid(row=r, column=c * 2 + 1, sticky="w")
+            es = []
+            for pre, key, suf in parts:
+                if pre:
+                    ttk.Label(fr, text=pre).pack(side="left", padx=(0, 2))
+                e = ttk.Entry(fr, textvariable=self.v[key], width=6)
+                e.pack(side="left")
+                if suf:
+                    ttk.Label(fr, text=suf).pack(side="left", padx=(2, 0))
+                ttk.Frame(fr, width=8).pack(side="left")
+                es.append(e)
+            return es
+
+        def combo(text, key, vals, r, c):
+            label(text, r, c)
+            cb = ttk.Combobox(self, textvariable=self.v[key], values=vals, width=9,
+                              state="readonly")
+            cb.grid(row=r, column=c * 2 + 1, sticky="w")
+            return cb
+
+        self.widgets = [
+            *fields("Location", 0, 0, [("X", "x", ""), ("Y", "y", "")]),
+            *fields("Interval", 1, 0, [("", "min", "min"), ("", "sec", "sec")]),
+            combo("Button", "button", list(EVENTS), 0, 1),
+            combo("Click type", "type", ["Single", "Double"], 1, 1),
+            *fields("± Random offset", 1, 2, [("", "offset", "ms")]),
+        ]
+        self.pick_btn = ttk.Button(self, text="Pick location", command=self._pick)
+        self.pick_btn.grid(row=0, column=4, columnspan=2, padx=12)
+        self.widgets.append(self.pick_btn)
+        self.set(ClickPoint(x=500, y=500))
+
+    def _pick(self):
+        def got(x, y):
+            self.v["x"].set(x); self.v["y"].set(y)
+        pick_location(self.winfo_toplevel(), got)
+
+    def set(self, p):
+        mins, rest = divmod(p.interval_ms, 60000)
+        for k, val in (("x", p.x), ("y", p.y), ("min", mins), ("sec", rest // 1000),
+                       ("offset", p.offset_ms), ("button", p.button), ("type", p.click_type)):
+            self.v[k].set(val)
+
+    def read(self):
+        """Build a ClickPoint from the fields; ValueError if invalid."""
+        v = self.v
+        x, y = int(v["x"].get()), int(v["y"].get())
+        mins, secs = (int(v[k].get() or 0) for k in ("min", "sec"))
+        offset = int(v["offset"].get() or 0)
+        interval = (mins * 60 + secs) * 1000
+        if min(mins, secs) < 0 or interval < 1 or offset < 0:
+            raise ValueError
+        return ClickPoint(x=x, y=y, interval_ms=interval, offset_ms=offset,
+                          button=v["button"].get(), click_type=v["type"].get())
+
+    def set_locked(self, locked):
+        for w in self.widgets:
+            if isinstance(w, ttk.Combobox):
+                w.config(state="disabled" if locked else "readonly")
+            elif isinstance(w, ttk.Button):
+                w.state(["disabled"] if locked else ["!disabled"])
+            else:
+                w.config(state="disabled" if locked else "normal")
+
+
+def form_error():
+    messagebox.showerror("Invalid value", "X, Y, interval and offset must be whole "
+                         "numbers (interval at least 1 sec, offset ≥ 0).")
+
+
+class EditDialog(tk.Toplevel):
+    def __init__(self, parent, point, on_ok):
+        super().__init__(parent)
+        self.title("Edit point")
+        self.transient(parent)
+        self.resizable(False, False)
+        self.on_ok = on_ok
+        self.form = PointForm(self)
+        self.form.pack(padx=12, pady=12)
+        self.form.set(point)
+        bar = ttk.Frame(self)
+        bar.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(bar, text="Cancel", command=self.destroy).pack(side="right")
+        ttk.Button(bar, text="OK", command=self._ok).pack(side="right", padx=4)
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.grab_set()
+
+    def _ok(self):
+        try:
+            p = self.form.read()
+        except ValueError:
+            form_error()
+            return
+        self.on_ok(p)
+        self.destroy()
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -112,13 +248,8 @@ class App(tk.Tk):
         self.points: list[ClickPoint] = []
         self.runner = None
         self.f6_was_down = False
-        self._loading = False
 
         self._build()
-        for k, val in (("x", 500), ("y", 500), ("min", 0), ("sec", 1),
-                       ("offset", 0), ("button", "Left"), ("type", "Single")):
-            self.v[k].set(val)  # defaults for new points
-        self._add_point()  # start with one point
         self.after(50, self._poll_hotkey)
         self.protocol("WM_DELETE_WINDOW", self._close)
 
@@ -140,65 +271,36 @@ class App(tk.Tk):
             self.tree.heading(c, text=c)
             self.tree.column(c, width=w, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=8)
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<Double-1>", self._toggle_enabled)
+        self.tree.bind("<Button-3>", self._context_menu)
 
-        # editor
-        ed = ttk.LabelFrame(self, text="Selected point", padding=8)
-        ed.pack(fill="x", padx=8, pady=8)
-        self.v = {k: tk.StringVar() for k in
-                  ("x", "y", "min", "sec", "offset", "button", "type")}
-
-        def label(text, r, c):
-            ttk.Label(ed, text=text).grid(row=r, column=c * 2, sticky="e", padx=(8, 4), pady=3)
-
-        def fields(text, r, c, parts):
-            """Row of entries; parts are (prefix, key, suffix)."""
-            label(text, r, c)
-            fr = ttk.Frame(ed)
-            fr.grid(row=r, column=c * 2 + 1, sticky="w")
-            es = []
-            for pre, key, suf in parts:
-                if pre:
-                    ttk.Label(fr, text=pre).pack(side="left", padx=(0, 2))
-                e = ttk.Entry(fr, textvariable=self.v[key], width=6)
-                e.pack(side="left")
-                if suf:
-                    ttk.Label(fr, text=suf).pack(side="left", padx=(2, 0))
-                ttk.Frame(fr, width=8).pack(side="left")
-                es.append(e)
-            return es
-
-        def combo(text, key, vals, r, c):
-            label(text, r, c)
-            cb = ttk.Combobox(ed, textvariable=self.v[key], values=vals, width=9, state="readonly")
-            cb.grid(row=r, column=c * 2 + 1, sticky="w")
-            return cb
-
-        self.editors = [
-            *fields("Location", 0, 0, [("X", "x", ""), ("Y", "y", "")]),
-            *fields("Interval", 1, 0, [("", "min", "min"), ("", "sec", "s")]),
-            combo("Button", "button", list(EVENTS), 0, 1),
-            combo("Click type", "type", ["Single", "Double"], 1, 1),
-            *fields("± Random offset", 1, 2, [("", "offset", "ms")]),
-        ]
-        self.pick_btn = ttk.Button(ed, text="Pick location", command=self._pick)
-        self.pick_btn.grid(row=0, column=4, columnspan=2, padx=12)
-        for var in self.v.values():  # edits apply to the selected point immediately
-            var.trace_add("write", self._live_apply)
+        # settings used by "Add point"
+        box = ttk.LabelFrame(self, text="New point", padding=8)
+        box.pack(fill="x", padx=8, pady=8)
+        self.form = PointForm(box)
+        self.form.pack(anchor="w")
 
         bar = ttk.Frame(self, padding=(8, 0, 8, 8))
         bar.pack(fill="x")
         self.list_buttons = [
             ttk.Button(bar, text="Add point", command=self._add_point),
-            ttk.Button(bar, text="Duplicate", command=self._duplicate),
             ttk.Button(bar, text="Remove", command=self._remove),
             ttk.Button(bar, text="Move up", command=lambda: self._move(-1)),
             ttk.Button(bar, text="Move down", command=lambda: self._move(1)),
         ]
         for b in self.list_buttons:
             b.pack(side="left", padx=(0, 4))
-        ttk.Label(bar, text="Double-click a row to enable/disable it").pack(side="right")
+        ttk.Label(bar, text="Right-click a point to edit it · double-click to enable/disable"
+                  ).pack(side="right")
+
+        self.menu = tk.Menu(self, tearoff=False)
+        self.menu.add_command(label="Edit…", command=self._edit)
+        self.menu.add_command(label="Enable / disable", command=self._toggle_enabled)
+        self.menu.add_command(label="Duplicate", command=self._duplicate)
+        self.menu.add_command(label="Remove", command=self._remove)
+        self.menu.add_separator()
+        self.menu.add_command(label="Move up", command=lambda: self._move(-1))
+        self.menu.add_command(label="Move down", command=lambda: self._move(1))
 
     # ---- list handling
     def _selected(self):
@@ -217,27 +319,33 @@ class App(tk.Tk):
         if select is not None and 0 <= select < len(self.points):
             self.tree.selection_set(str(select))
 
-    def _on_select(self, _=None):
-        i = self._selected()
-        if i is None:
+    def _context_menu(self, event):
+        row = self.tree.identify_row(event.y)
+        if self.runner or not row:
             return
-        self._loading = True  # don't write loaded values straight back
-        p = self.points[i]
-        self.v["x"].set(p.x); self.v["y"].set(p.y)
-        mins, rest = divmod(p.interval_ms, 60000)
-        self.v["min"].set(mins); self.v["sec"].set(rest // 1000)
-        self.v["offset"].set(p.offset_ms)
-        self.v["button"].set(p.button); self.v["type"].set(p.click_type)
-        self._loading = False
+        self.tree.selection_set(row)
+        self.menu.tk_popup(event.x_root, event.y_root)
 
     def _add_point(self):
         try:
-            p = self._read_form()
+            p = self.form.read()
         except ValueError:
-            self._form_error()
+            form_error()
             return
         self.points.append(p)
         self._refresh(len(self.points) - 1)
+
+    def _edit(self):
+        i = self._selected()
+        if i is None:
+            return
+
+        def save(new):
+            new.enabled = self.points[i].enabled
+            self.points[i] = new
+            self._refresh(i)
+
+        EditDialog(self, self.points[i], save)
 
     def _duplicate(self):
         i = self._selected()
@@ -265,58 +373,6 @@ class App(tk.Tk):
             self.points[i].enabled = not self.points[i].enabled
             self._refresh(i)
 
-    def _read_form(self):
-        """Build a ClickPoint from the editor fields; ValueError if invalid."""
-        x, y = int(self.v["x"].get()), int(self.v["y"].get())
-        mins, secs = (int(self.v[k].get() or 0) for k in ("min", "sec"))
-        offset = int(self.v["offset"].get() or 0)
-        interval = (mins * 60 + secs) * 1000
-        if min(mins, secs) < 0 or interval < 1 or offset < 0:
-            raise ValueError
-        return ClickPoint(x=x, y=y, interval_ms=interval, offset_ms=offset,
-                          button=self.v["button"].get(), click_type=self.v["type"].get())
-
-    def _form_error(self):
-        messagebox.showerror("Invalid value", "X, Y, interval and offset must be whole "
-                             "numbers (interval at least 1 s, offset ≥ 0).")
-
-    def _live_apply(self, *_):
-        i = self._selected()
-        if i is None or self._loading:
-            return
-        try:
-            new = self._read_form()  # half-typed values are ignored until valid
-        except ValueError:
-            return
-        p = self.points[i]
-        new.enabled = p.enabled
-        self.points[i] = new
-        self.tree.item(str(i), values=self._row(i, new))
-
-    def _pick(self):
-        """Cover all screens with a faint overlay; the next left click picks the spot."""
-        gm = user32.GetSystemMetrics
-        vx, vy, vw, vh = gm(76), gm(77), gm(78), gm(79)  # virtual screen
-        ov = tk.Toplevel(self)
-        ov.overrideredirect(True)
-        ov.geometry(f"{vw}x{vh}{vx:+d}{vy:+d}")
-        ov.attributes("-topmost", True)
-        ov.attributes("-alpha", 0.25)
-        ov.configure(bg="black", cursor="crosshair")
-        tk.Label(ov, text="Left-click to pick a location  (Esc to cancel)",
-                 fg="white", bg="black", font=("Segoe UI", 18)).place(relx=0.5, rely=0.1,
-                                                                      anchor="center")
-
-        def done(pick):
-            ov.destroy()
-            if pick:
-                x, y = cursor_pos()
-                self.v["x"].set(x); self.v["y"].set(y)
-
-        ov.bind("<Button-1>", lambda e: done(True))
-        ov.bind("<Escape>", lambda e: done(False))
-        ov.focus_force()
-
     # ---- run control
     def toggle(self):
         if self.runner:
@@ -338,13 +394,9 @@ class App(tk.Tk):
         self._lock(False)
 
     def _lock(self, locked):
-        state = "disabled" if locked else "normal"
-        for w in self.editors + [self.pick_btn] + self.list_buttons:
-            try:
-                w.config(state="disabled" if locked else
-                         ("readonly" if isinstance(w, ttk.Combobox) else "normal"))
-            except tk.TclError:
-                w.state(["disabled"] if locked else ["!disabled"])
+        self.form.set_locked(locked)
+        for b in self.list_buttons:
+            b.state(["disabled"] if locked else ["!disabled"])
 
     def _poll_hotkey(self):
         down = bool(user32.GetAsyncKeyState(VK_F6) & 0x8000)
