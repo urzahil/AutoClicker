@@ -2,11 +2,13 @@
 
 Each point has its own location, interval, random offset, mouse button and
 click type. After every click the next delay is  interval + uniform(-offset, +offset).
-Global hotkey F6 starts/stops clicking, even when the window is not focused.
+A global hotkey (F6 by default, changeable) starts/stops clicking, even when the
+window is not focused.
 """
 import ctypes
 import heapq
 import json
+import os
 import random
 import threading
 import time
@@ -37,6 +39,23 @@ EVENTS = {  # button -> (down flag, up flag)
     "Middle": (0x0020, 0x0040),
 }
 VK_F6 = 0x75
+CONFIG = os.path.join(os.environ.get("APPDATA", "."), "AutoClicker", "config.json")
+_KEY_NAMES = {0x08: "Backspace", 0x09: "Tab", 0x0D: "Enter", 0x13: "Pause", 0x14: "CapsLock",
+              0x20: "Space", 0x21: "PageUp", 0x22: "PageDown", 0x23: "End", 0x24: "Home",
+              0x25: "Left", 0x26: "Up", 0x27: "Right", 0x28: "Down", 0x2D: "Insert",
+              0x2E: "Delete", 0x91: "ScrollLock"}
+# keys that can't be a hotkey: mouse buttons, Esc (cancels), modifiers
+_SKIP_KEYS = {1, 2, 4, 5, 6, 0x1B, 0x10, 0x11, 0x12, 0x5B, 0x5C, *range(0xA0, 0xA6)}
+
+
+def vk_name(vk):
+    if 0x70 <= vk <= 0x87:
+        return f"F{vk - 0x6F}"
+    if 0x60 <= vk <= 0x69:
+        return f"Num{vk - 0x60}"
+    if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:
+        return chr(vk)
+    return _KEY_NAMES.get(vk, f"Key 0x{vk:02X}")
 
 
 def cursor_pos():
@@ -250,6 +269,14 @@ class App(tk.Tk):
         self.f6_was_down = False
 
         self._build()
+        self.hotkey = VK_F6
+        self.capturing = False
+        try:
+            with open(CONFIG) as fh:
+                self.hotkey = int(json.load(fh)["hotkey"])
+        except Exception:
+            pass
+        self._update_hotkey_labels()
         self.after(50, self._poll_hotkey)
         self.protocol("WM_DELETE_WINDOW", self._close)
 
@@ -257,10 +284,12 @@ class App(tk.Tk):
     def _build(self):
         top = ttk.Frame(self, padding=8)
         top.pack(fill="x")
-        self.start_btn = ttk.Button(top, text="Start (F6)", command=self.toggle)
+        self.start_btn = ttk.Button(top, command=self.toggle)
         self.start_btn.pack(side="left")
         self.status = ttk.Label(top, text="Stopped")
         self.status.pack(side="left", padx=12)
+        self.hotkey_btn = ttk.Button(top, command=self._capture_hotkey)
+        self.hotkey_btn.pack(side="left")
         ttk.Button(top, text="Save…", command=self._save).pack(side="right")
         ttk.Button(top, text="Load…", command=self._load).pack(side="right", padx=4)
 
@@ -383,13 +412,13 @@ class App(tk.Tk):
             return
         self.runner = Clicker(self.points, lambda: self.after(0, self._stopped))
         self.runner.start()
-        self.start_btn.config(text="Stop (F6)")
+        self.start_btn.config(text=f"Stop ({vk_name(self.hotkey)})")
         self.status.config(text="Running…")
         self._lock(True)
 
     def _stopped(self):
         self.runner = None
-        self.start_btn.config(text="Start (F6)")
+        self.start_btn.config(text=f"Start ({vk_name(self.hotkey)})")
         self.status.config(text="Stopped")
         self._lock(False)
 
@@ -398,12 +427,46 @@ class App(tk.Tk):
         for b in self.list_buttons:
             b.state(["disabled"] if locked else ["!disabled"])
 
+    def _update_hotkey_labels(self):
+        name = vk_name(self.hotkey)
+        verb = "Stop" if self.runner else "Start"
+        self.start_btn.config(text=f"{verb} ({name})")
+        self.hotkey_btn.config(text="Change hotkey…")
+
+    def _capture_hotkey(self):
+        self.capturing = True
+        self.hotkey_btn.config(text="Press a key… (Esc cancels)")
+        self.hotkey_btn.state(["disabled"])
+
     def _poll_hotkey(self):
-        down = bool(user32.GetAsyncKeyState(VK_F6) & 0x8000)
-        if down and not self.f6_was_down:
-            self.toggle()
-        self.f6_was_down = down
+        if self.capturing:
+            if user32.GetAsyncKeyState(0x1B) & 0x8000:
+                self._end_capture()
+            else:
+                for vk in range(8, 255):
+                    if vk not in _SKIP_KEYS and user32.GetAsyncKeyState(vk) & 0x8000:
+                        self.hotkey = vk
+                        self._end_capture(save=True)
+                        break
+            self.f6_was_down = True  # swallow the key that was just pressed
+        else:
+            down = bool(user32.GetAsyncKeyState(self.hotkey) & 0x8000)
+            if down and not self.f6_was_down:
+                self.toggle()
+            self.f6_was_down = down
         self.after(50, self._poll_hotkey)
+
+    def _end_capture(self, save=False):
+        self.capturing = False
+        self.hotkey_btn.state(["!disabled"])
+        self._update_hotkey_labels()
+        if save:
+            try:
+                os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+                with open(CONFIG, "w") as fh:
+                    json.dump({"hotkey": self.hotkey}, fh)
+            except OSError:
+                pass
 
     # ---- persistence
     def _save(self):
