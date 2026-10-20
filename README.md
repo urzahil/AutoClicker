@@ -1,0 +1,46 @@
+﻿# AutoClicker
+
+A simple multi-point autoclicker for Windows, written in Python with no dependencies (tkinter + ctypes).
+
+## Features
+
+Add as many click points as you like. Each point is configured independently:
+
+- **Location** – X/Y screen coordinates, or press **Pick location** and left-click anywhere on screen (Esc cancels)
+- **Interval** – time between clicks, in milliseconds
+- **Random offset** – ± milliseconds, re-rolled after every click (next delay = interval + random(−offset, +offset))
+- **Mouse button** – left, right or middle
+- **Click type** – single or double
+
+Other things:
+
+- Press **F6** to start/stop, even when the window isn't focused
+- Enable/disable points by double-clicking a row; duplicate, remove and reorder points
+- Save and load your setup as JSON
+
+## Usage
+
+Download `AutoClicker.exe` from the Releases page (if available), or run from source:
+
+```
+python autoclicker.py
+```
+
+Build a standalone executable:
+
+```
+pip install pyinstaller
+python -m PyInstaller --onefile --windowed --name AutoClicker autoclicker.py
+```
+
+The result is in `dist/AutoClicker.exe`.
+
+## Notes
+
+- The mouse cursor moves to each point before clicking.
+- To click inside apps running as administrator, run AutoClicker as administrator too.
+- Use responsibly and respect the terms of any software or game you use it with.
+
+## License
+
+GPL-3.0 – see [LICENSE](LICENSE).
