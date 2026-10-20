@@ -115,7 +115,7 @@ class App(tk.Tk):
         self._loading = False
 
         self._build()
-        for k, val in (("x", 500), ("y", 500), ("min", 0), ("sec", 1), ("ms", 0),
+        for k, val in (("x", 500), ("y", 500), ("min", 0), ("sec", 1),
                        ("offset", 0), ("button", "Left"), ("type", "Single")):
             self.v[k].set(val)  # defaults for new points
         self._add_point()  # start with one point
@@ -146,43 +146,44 @@ class App(tk.Tk):
         # editor
         ed = ttk.LabelFrame(self, text="Selected point", padding=8)
         ed.pack(fill="x", padx=8, pady=8)
-        self.v = {
-            "x": tk.StringVar(), "y": tk.StringVar(),
-            "min": tk.StringVar(), "sec": tk.StringVar(), "ms": tk.StringVar(),
-            "offset": tk.StringVar(),
-            "button": tk.StringVar(), "type": tk.StringVar(),
-        }
-        def entry(label, key, r, c):
-            ttk.Label(ed, text=label).grid(row=r, column=c * 2, sticky="e", padx=(8, 4), pady=3)
-            e = ttk.Entry(ed, textvariable=self.v[key], width=10)
-            e.grid(row=r, column=c * 2 + 1, sticky="w")
-            return e
-        def combo(label, key, vals, r, c):
-            ttk.Label(ed, text=label).grid(row=r, column=c * 2, sticky="e", padx=(8, 4), pady=3)
+        self.v = {k: tk.StringVar() for k in
+                  ("x", "y", "min", "sec", "offset", "button", "type")}
+
+        def label(text, r, c):
+            ttk.Label(ed, text=text).grid(row=r, column=c * 2, sticky="e", padx=(8, 4), pady=3)
+
+        def fields(text, r, c, parts):
+            """Row of entries; parts are (prefix, key, suffix)."""
+            label(text, r, c)
+            fr = ttk.Frame(ed)
+            fr.grid(row=r, column=c * 2 + 1, sticky="w")
+            es = []
+            for pre, key, suf in parts:
+                if pre:
+                    ttk.Label(fr, text=pre).pack(side="left", padx=(0, 2))
+                e = ttk.Entry(fr, textvariable=self.v[key], width=6)
+                e.pack(side="left")
+                if suf:
+                    ttk.Label(fr, text=suf).pack(side="left", padx=(2, 0))
+                ttk.Frame(fr, width=8).pack(side="left")
+                es.append(e)
+            return es
+
+        def combo(text, key, vals, r, c):
+            label(text, r, c)
             cb = ttk.Combobox(ed, textvariable=self.v[key], values=vals, width=9, state="readonly")
             cb.grid(row=r, column=c * 2 + 1, sticky="w")
             return cb
 
-        def interval_fields(r, c):
-            ttk.Label(ed, text="Interval").grid(row=r, column=c * 2, sticky="e", padx=(8, 4), pady=3)
-            fr = ttk.Frame(ed)
-            fr.grid(row=r, column=c * 2 + 1, sticky="w")
-            es = []
-            for key, unit in (("min", "min"), ("sec", "s"), ("ms", "ms")):
-                e = ttk.Entry(fr, textvariable=self.v[key], width=4)
-                e.pack(side="left")
-                ttk.Label(fr, text=unit).pack(side="left", padx=(2, 6))
-                es.append(e)
-            return es
-
         self.editors = [
-            entry("X", "x", 0, 0), entry("Y", "y", 0, 1),
-            *interval_fields(1, 0), entry("± Random offset (ms)", "offset", 1, 1),
-            combo("Button", "button", list(EVENTS), 0, 2),
-            combo("Click type", "type", ["Single", "Double"], 1, 2),
+            *fields("Location", 0, 0, [("X", "x", ""), ("Y", "y", "")]),
+            *fields("Interval", 1, 0, [("", "min", "min"), ("", "sec", "s")]),
+            combo("Button", "button", list(EVENTS), 0, 1),
+            combo("Click type", "type", ["Single", "Double"], 1, 1),
+            *fields("± Random offset", 1, 2, [("", "offset", "ms")]),
         ]
         self.pick_btn = ttk.Button(ed, text="Pick location", command=self._pick)
-        self.pick_btn.grid(row=0, column=6, padx=12)
+        self.pick_btn.grid(row=0, column=4, columnspan=2, padx=12)
         for var in self.v.values():  # edits apply to the selected point immediately
             var.trace_add("write", self._live_apply)
 
@@ -224,8 +225,7 @@ class App(tk.Tk):
         p = self.points[i]
         self.v["x"].set(p.x); self.v["y"].set(p.y)
         mins, rest = divmod(p.interval_ms, 60000)
-        secs, ms = divmod(rest, 1000)
-        self.v["min"].set(mins); self.v["sec"].set(secs); self.v["ms"].set(ms)
+        self.v["min"].set(mins); self.v["sec"].set(rest // 1000)
         self.v["offset"].set(p.offset_ms)
         self.v["button"].set(p.button); self.v["type"].set(p.click_type)
         self._loading = False
@@ -268,17 +268,17 @@ class App(tk.Tk):
     def _read_form(self):
         """Build a ClickPoint from the editor fields; ValueError if invalid."""
         x, y = int(self.v["x"].get()), int(self.v["y"].get())
-        mins, secs, ms = (int(self.v[k].get() or 0) for k in ("min", "sec", "ms"))
+        mins, secs = (int(self.v[k].get() or 0) for k in ("min", "sec"))
         offset = int(self.v["offset"].get() or 0)
-        interval = (mins * 60 + secs) * 1000 + ms
-        if min(mins, secs, ms) < 0 or interval < 1 or offset < 0:
+        interval = (mins * 60 + secs) * 1000
+        if min(mins, secs) < 0 or interval < 1 or offset < 0:
             raise ValueError
         return ClickPoint(x=x, y=y, interval_ms=interval, offset_ms=offset,
                           button=self.v["button"].get(), click_type=self.v["type"].get())
 
     def _form_error(self):
         messagebox.showerror("Invalid value", "X, Y, interval and offset must be whole "
-                             "numbers (interval at least 1 ms, offset ≥ 0).")
+                             "numbers (interval at least 1 s, offset ≥ 0).")
 
     def _live_apply(self, *_):
         i = self._selected()
