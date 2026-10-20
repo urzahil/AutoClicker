@@ -112,8 +112,12 @@ class App(tk.Tk):
         self.points: list[ClickPoint] = []
         self.runner = None
         self.f6_was_down = False
+        self._loading = False
 
         self._build()
+        for k, val in (("x", 500), ("y", 500), ("min", 0), ("sec", 1), ("ms", 0),
+                       ("offset", 0), ("button", "Left"), ("type", "Single")):
+            self.v[k].set(val)  # defaults for new points
         self._add_point()  # start with one point
         self.after(50, self._poll_hotkey)
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -179,8 +183,8 @@ class App(tk.Tk):
         ]
         self.pick_btn = ttk.Button(ed, text="Pick location", command=self._pick)
         self.pick_btn.grid(row=0, column=6, padx=12)
-        self.apply_btn = ttk.Button(ed, text="Apply changes", command=self._apply)
-        self.apply_btn.grid(row=1, column=6, padx=12)
+        for var in self.v.values():  # edits apply to the selected point immediately
+            var.trace_add("write", self._live_apply)
 
         bar = ttk.Frame(self, padding=(8, 0, 8, 8))
         bar.pack(fill="x")
@@ -200,12 +204,15 @@ class App(tk.Tk):
         sel = self.tree.selection()
         return int(sel[0]) if sel else None
 
+    @staticmethod
+    def _row(i, p):
+        return (i + 1, "✔" if p.enabled else "—", p.x, p.y, p.button,
+                p.click_type, fmt_interval(p.interval_ms), p.offset_ms)
+
     def _refresh(self, select=None):
         self.tree.delete(*self.tree.get_children())
         for i, p in enumerate(self.points):
-            self.tree.insert("", "end", iid=str(i), values=(
-                i + 1, "✔" if p.enabled else "—", p.x, p.y, p.button,
-                p.click_type, fmt_interval(p.interval_ms), p.offset_ms))
+            self.tree.insert("", "end", iid=str(i), values=self._row(i, p))
         if select is not None and 0 <= select < len(self.points):
             self.tree.selection_set(str(select))
 
@@ -213,6 +220,7 @@ class App(tk.Tk):
         i = self._selected()
         if i is None:
             return
+        self._loading = True  # don't write loaded values straight back
         p = self.points[i]
         self.v["x"].set(p.x); self.v["y"].set(p.y)
         mins, rest = divmod(p.interval_ms, 60000)
@@ -220,10 +228,15 @@ class App(tk.Tk):
         self.v["min"].set(mins); self.v["sec"].set(secs); self.v["ms"].set(ms)
         self.v["offset"].set(p.offset_ms)
         self.v["button"].set(p.button); self.v["type"].set(p.click_type)
+        self._loading = False
 
     def _add_point(self):
-        x, y = cursor_pos() if self.points else (500, 500)
-        self.points.append(ClickPoint(x=x, y=y))
+        try:
+            p = self._read_form()
+        except ValueError:
+            self._form_error()
+            return
+        self.points.append(p)
         self._refresh(len(self.points) - 1)
 
     def _duplicate(self):
@@ -252,25 +265,33 @@ class App(tk.Tk):
             self.points[i].enabled = not self.points[i].enabled
             self._refresh(i)
 
-    def _apply(self):
+    def _read_form(self):
+        """Build a ClickPoint from the editor fields; ValueError if invalid."""
+        x, y = int(self.v["x"].get()), int(self.v["y"].get())
+        mins, secs, ms = (int(self.v[k].get() or 0) for k in ("min", "sec", "ms"))
+        offset = int(self.v["offset"].get() or 0)
+        interval = (mins * 60 + secs) * 1000 + ms
+        if min(mins, secs, ms) < 0 or interval < 1 or offset < 0:
+            raise ValueError
+        return ClickPoint(x=x, y=y, interval_ms=interval, offset_ms=offset,
+                          button=self.v["button"].get(), click_type=self.v["type"].get())
+
+    def _form_error(self):
+        messagebox.showerror("Invalid value", "X, Y, interval and offset must be whole "
+                             "numbers (interval at least 1 ms, offset ≥ 0).")
+
+    def _live_apply(self, *_):
         i = self._selected()
-        if i is None:
+        if i is None or self._loading:
             return
         try:
-            x, y = int(self.v["x"].get()), int(self.v["y"].get())
-            mins, secs, ms = (int(self.v[k].get() or 0) for k in ("min", "sec", "ms"))
-            offset = int(self.v["offset"].get() or 0)
-            interval = (mins * 60 + secs) * 1000 + ms
-            if min(mins, secs, ms) < 0 or interval < 1 or offset < 0:
-                raise ValueError
+            new = self._read_form()  # half-typed values are ignored until valid
         except ValueError:
-            messagebox.showerror("Invalid value", "X, Y, interval and offset must be whole "
-                                 "numbers (interval at least 1 ms, offset ≥ 0).")
             return
         p = self.points[i]
-        p.x, p.y, p.interval_ms, p.offset_ms = x, y, interval, offset
-        p.button, p.click_type = self.v["button"].get(), self.v["type"].get()
-        self._refresh(i)
+        new.enabled = p.enabled
+        self.points[i] = new
+        self.tree.item(str(i), values=self._row(i, new))
 
     def _pick(self):
         """Cover all screens with a faint overlay; the next left click picks the spot."""
@@ -291,7 +312,6 @@ class App(tk.Tk):
             if pick:
                 x, y = cursor_pos()
                 self.v["x"].set(x); self.v["y"].set(y)
-                self._apply()
 
         ov.bind("<Button-1>", lambda e: done(True))
         ov.bind("<Escape>", lambda e: done(False))
@@ -319,7 +339,7 @@ class App(tk.Tk):
 
     def _lock(self, locked):
         state = "disabled" if locked else "normal"
-        for w in self.editors + [self.pick_btn, self.apply_btn] + self.list_buttons:
+        for w in self.editors + [self.pick_btn] + self.list_buttons:
             try:
                 w.config(state="disabled" if locked else
                          ("readonly" if isinstance(w, ttk.Combobox) else "normal"))
