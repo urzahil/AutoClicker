@@ -99,13 +99,17 @@ namespace AutoClicker
                 case "Middle": down = 0x0020; up = 0x0040; break;
                 default: down = 0x0002; up = 0x0004; break;
             }
+            // Apps hit-test a click at the cursor position they last processed, and many ignore
+            // a press/release pair with no gap, so let the move settle and hold the button briefly.
             Native.SetCursorPos(p.X, p.Y);
+            Thread.Sleep(30);
             int n = p.ClickType == "Double" ? 2 : 1;
             for (int i = 0; i < n; i++)
             {
                 Native.mouse_event(down, 0, 0, 0, UIntPtr.Zero);
+                Thread.Sleep(40);
                 Native.mouse_event(up, 0, 0, 0, UIntPtr.Zero);
-                if (n == 2) Thread.Sleep(20);
+                if (i < n - 1) Thread.Sleep(60);
             }
         }
     }

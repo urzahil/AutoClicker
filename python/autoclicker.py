@@ -66,12 +66,15 @@ def cursor_pos():
 
 def click(x, y, button, double):
     user32.SetCursorPos(int(x), int(y))
+    time.sleep(0.03)  # let the move settle so the click lands at the new position
     down, up = EVENTS[button]
-    for _ in range(2 if double else 1):
+    n = 2 if double else 1
+    for i in range(n):
         user32.mouse_event(down, 0, 0, 0, 0)
+        time.sleep(0.04)  # hold briefly; many apps ignore zero-length presses
         user32.mouse_event(up, 0, 0, 0, 0)
-        if double:
-            time.sleep(0.02)
+        if i < n - 1:
+            time.sleep(0.06)
 
 
 def fmt_interval(ms):
