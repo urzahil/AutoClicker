@@ -7,7 +7,7 @@ A simple multi-point autoclicker for Windows, written in Python with no dependen
 Add as many click points as you like. Each point is configured independently:
 
 - **Location** – X/Y screen coordinates, or press **Pick location** and left-click anywhere on screen (Esc cancels)
-- **Interval** – time between clicks, set in minutes, seconds and milliseconds
+- **Interval** – time between clicks, set in minutes and seconds
 - **Random offset** – ± milliseconds, re-rolled after every click (next delay = interval + random(−offset, +offset))
 - **Mouse button** – left, right or middle
 - **Click type** – single or double
@@ -20,7 +20,7 @@ Other things:
 
 ## Usage
 
-Download `AutoClicker.exe` from the Releases page (if available), or run from source:
+Download `AutoClicker.exe` from the Releases page, or run from source:
 
 ```
 python autoclicker.py
