@@ -1,6 +1,6 @@
 # AutoClicker
 
-A simple multi-point autoclicker for Windows. It's a native app (C#, WinForms): a single ~25 KB `.exe`, nothing to install.
+A simple multi-point autoclicker for Windows. It's a native app (C#, WinForms): a single ~155 KB `.exe`, nothing to install.
 
 ## Features
 

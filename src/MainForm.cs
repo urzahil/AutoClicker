@@ -43,6 +43,7 @@ namespace AutoClicker
         public MainForm()
         {
             Text = "AutoClicker";
+            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(780, 480);
