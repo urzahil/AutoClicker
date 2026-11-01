@@ -15,3 +15,7 @@ This applies even when a session was started on an auto-generated branch name: c
 - Implementation tasks (new features, refactors): use Sonnet.
 - Simple edits, formatting, renaming: use Haiku.
 - Security-sensitive changes: always escalate to Opus for review.
+
+## Pull requests
+
+After creating a pull request, do not ask whether to watch it, and do not subscribe to its activity to respond to review comments or CI failures, unless explicitly asked.
