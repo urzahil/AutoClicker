@@ -9,6 +9,8 @@ Name each branch after what it changes: a `feature/` or `fix/` prefix, then a sh
 
 This applies even when a session was started on an auto-generated branch name: create a properly named branch and work there.
 
+Just follow this rule silently: do not remind the user about it or point out that the session started on an auto-generated branch name.
+
 ## Model assignment rules
 
 - Architecture decisions and reviews: use Opus.
