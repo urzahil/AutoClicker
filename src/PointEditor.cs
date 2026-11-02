@@ -2,7 +2,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 
-namespace AutoClicker
+namespace Snap
 {
     /// <summary>Fields for one point; used for the "New point" panel and the edit dialog.</summary>
     class PointEditor : UserControl

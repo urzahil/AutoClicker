@@ -5,7 +5,7 @@ using System.IO;
 using System.Windows.Forms;
 using System.Web.Script.Serialization;
 
-namespace AutoClicker
+namespace Snap
 {
     static class Program
     {
@@ -22,9 +22,10 @@ namespace AutoClicker
     class MainForm : Form
     {
         const int VkF6 = 0x75;
-        static readonly string ConfigPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "AutoClicker", "config.json");
+        static readonly string AppData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        static readonly string ConfigPath = Path.Combine(AppData, "Snap", "config.json");
+        // Settings from before the app was renamed; read once if the new file doesn't exist yet.
+        static readonly string LegacyConfigPath = Path.Combine(AppData, "AutoClicker", "config.json");
 
         readonly List<ClickPoint> points = new List<ClickPoint>();
         readonly ListView list = new ListView();
@@ -46,7 +47,7 @@ namespace AutoClicker
 
         public MainForm()
         {
-            Text = "AutoClicker";
+            Text = "Snap";
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Dpi;
@@ -389,8 +390,10 @@ namespace AutoClicker
         {
             try
             {
+                string path = File.Exists(ConfigPath) || !File.Exists(LegacyConfigPath)
+                    ? ConfigPath : LegacyConfigPath;
                 var d = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
-                    File.ReadAllText(ConfigPath));
+                    File.ReadAllText(path));
                 if (d.ContainsKey("hotkey")) hotkey = Convert.ToInt32(d["hotkey"]);
                 if (d.ContainsKey("keep_awake")) keepAwakeBox.Checked = Convert.ToBoolean(d["keep_awake"]);
                 if (d.ContainsKey("window_x") && d.ContainsKey("window_y") &&
