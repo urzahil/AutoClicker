@@ -12,8 +12,49 @@ namespace AutoClicker
         [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
         [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
         [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint ms);
+        [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
+        [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LastInputInfo info);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct LastInputInfo { public uint Size; public uint Time; }
 
         public static bool IsDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+
+        /// <summary>Milliseconds since the last keyboard or mouse input (real or injected).</summary>
+        public static uint IdleMs()
+        {
+            var info = new LastInputInfo();
+            info.Size = (uint)Marshal.SizeOf(typeof(LastInputInfo));
+            if (!GetLastInputInfo(ref info)) return 0;
+            return unchecked((uint)Environment.TickCount - info.Time);
+        }
+    }
+
+    /// <summary>
+    /// Keeps the PC from sleeping, turning the display off or locking for inactivity while the
+    /// clicker runs. Execution state is per thread, so Begin/End must run on the clicker thread.
+    /// </summary>
+    static class KeepAwake
+    {
+        const uint EsContinuous = 0x80000000, EsSystemRequired = 0x00000001, EsDisplayRequired = 0x00000002;
+        const uint MouseMove = 0x0001;
+        public const int IdleThresholdMs = 60000;
+
+        public static void Begin() { Native.SetThreadExecutionState(EsContinuous | EsSystemRequired | EsDisplayRequired); }
+        public static void End() { Native.SetThreadExecutionState(EsContinuous); }
+
+        /// <summary>
+        /// Sends a 1-pixel move and back if there has been no input for a minute. Injected input
+        /// resets the inactivity timer behind the "machine inactivity limit" lock and screen saver,
+        /// which SetThreadExecutionState alone does not. The cursor normally ends where it started
+        /// (pointer acceleration can leave it a pixel off; each click repositions it anyway).
+        /// </summary>
+        public static void NudgeIfIdle()
+        {
+            if (Native.IdleMs() < IdleThresholdMs) return;
+            Native.mouse_event(MouseMove, 1, 0, 0, UIntPtr.Zero);
+            Native.mouse_event(MouseMove, unchecked((uint)-1), 0, 0, UIntPtr.Zero);
+        }
     }
 
     class ClickPoint
@@ -54,14 +95,16 @@ namespace AutoClicker
         readonly Action onStopped;
         readonly Thread thread;
         readonly Random rnd = new Random();
+        readonly bool keepAwake;
 
         /// <summary>
         /// Keeps references to the points (not copies) so toggling Enabled takes effect while
         /// running; call NotifyChanged() after toggling. Other edits are locked while running.
         /// </summary>
-        public Clicker(IEnumerable<ClickPoint> source, Action onStopped)
+        public Clicker(IEnumerable<ClickPoint> source, bool keepAwake, Action onStopped)
         {
             points.AddRange(source);
+            this.keepAwake = keepAwake;
             this.onStopped = onStopped;
             thread = new Thread(Run);
             thread.IsBackground = true;
@@ -73,10 +116,23 @@ namespace AutoClicker
 
         void Run()
         {
+            if (keepAwake) KeepAwake.Begin();
+            try { Loop(); }
+            finally
+            {
+                if (keepAwake) KeepAwake.End();
+                onStopped();
+            }
+        }
+
+        void Loop()
+        {
+            const double NudgeCheckSeconds = 15;
             var sw = Stopwatch.StartNew();
             var due = new double[points.Count];
             for (int i = 0; i < due.Length; i++)
                 due[i] = points[i].Enabled ? 0.5 : double.PositiveInfinity;
+            double nudgeDue = keepAwake ? NudgeCheckSeconds : double.PositiveInfinity;
             var handles = new WaitHandle[] { stop, changed };
 
             while (!stop.WaitOne(0))
@@ -89,27 +145,32 @@ namespace AutoClicker
                     else if (double.IsPositiveInfinity(due[i])) due[i] = now + 0.2;
                 }
 
+                if (now >= nudgeDue)
+                {
+                    KeepAwake.NudgeIfIdle();
+                    nudgeDue = now + NudgeCheckSeconds;
+                }
+
                 int next = 0;
                 for (int i = 1; i < due.Length; i++) if (due[i] < due[next]) next = i;
 
+                double nextAt = due.Length > 0 ? Math.Min(due[next], nudgeDue) : nudgeDue;
                 int timeout = Timeout.Infinite;
-                if (due.Length > 0 && !double.IsPositiveInfinity(due[next]))
+                if (!double.IsPositiveInfinity(nextAt))
                 {
-                    double wait = due[next] - now;
-                    if (wait <= 0) timeout = 0;
-                    else timeout = (int)Math.Ceiling(wait * 1000);
+                    double wait = nextAt - now;
+                    timeout = wait <= 0 ? 0 : (int)Math.Ceiling(wait * 1000);
                 }
-                if (timeout != 0)
+                if (timeout != 0 || due.Length == 0 || due[next] > now)
                 {
                     if (WaitHandle.WaitAny(handles, timeout) == 0) break;
-                    continue; // woke up early, or the enabled set changed: re-evaluate
+                    continue; // woke up early, the enabled set changed, or a nudge is due: re-evaluate
                 }
 
                 var p = points[next];
                 Click(p);
                 due[next] = sw.Elapsed.TotalSeconds + p.NextDelaySeconds(rnd);
             }
-            onStopped();
         }
         static void Click(ClickPoint p)
         {

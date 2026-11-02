@@ -32,6 +32,7 @@ namespace AutoClicker
         readonly Button startBtn = new Button();
         readonly Button hotkeyBtn = new Button();
         readonly Label status = new Label();
+        readonly CheckBox keepAwakeBox = new CheckBox();
         readonly List<Button> listButtons = new List<Button>();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
         readonly Timer poll = new Timer();
@@ -39,6 +40,7 @@ namespace AutoClicker
         int hotkey = VkF6;
         bool capturing;
         bool keyWasDown;
+        bool loaded;
 
         public MainForm()
         {
@@ -92,6 +94,14 @@ namespace AutoClicker
             hotkeyBtn.AutoSize = true;
             hotkeyBtn.Text = "Change hotkey…";
             hotkeyBtn.Click += delegate { BeginCapture(); };
+            keepAwakeBox.Text = "Keep PC awake while running";
+            keepAwakeBox.AutoSize = true;
+            keepAwakeBox.Anchor = AnchorStyles.Left;
+            keepAwakeBox.Margin = new Padding(12, 0, 0, 0);
+            new ToolTip().SetToolTip(keepAwakeBox,
+                "Stops sleep, the screen saver and the inactivity lock while clicking.\n" +
+                "If there has been no input for a minute, the mouse is nudged by 1 pixel and back.");
+            keepAwakeBox.CheckedChanged += delegate { SaveConfig(); };
             var load = new Button { Text = "Load…", AutoSize = true };
             listButtons.Add(load); // loading replaces the list, so lock it while running
             var save = new Button { Text = "Save…", AutoSize = true };
@@ -103,6 +113,7 @@ namespace AutoClicker
             top.Controls.Add(startBtn, 0, 0);
             top.Controls.Add(status, 1, 0);
             top.Controls.Add(hotkeyBtn, 2, 0);
+            top.Controls.Add(keepAwakeBox, 3, 0);
             top.Controls.Add(right, 4, 0);
             top.Margin = new Padding(8);
             root.Controls.Add(top, 0, 0);
@@ -278,7 +289,7 @@ namespace AutoClicker
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            runner = new Clicker(points, delegate { BeginInvoke(new Action(Stopped)); });
+            runner = new Clicker(points, keepAwakeBox.Checked, delegate { BeginInvoke(new Action(Stopped)); });
             runner.Start();
             status.Text = "Running…";
             SetLocked(true);
@@ -296,6 +307,7 @@ namespace AutoClicker
         void SetLocked(bool locked)
         {
             editor.SetLocked(locked);
+            keepAwakeBox.Enabled = !locked;
             foreach (var b in listButtons) b.Enabled = !locked;
         }
 
@@ -375,18 +387,22 @@ namespace AutoClicker
             {
                 var d = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
                     File.ReadAllText(ConfigPath));
-                hotkey = Convert.ToInt32(d["hotkey"]);
+                if (d.ContainsKey("hotkey")) hotkey = Convert.ToInt32(d["hotkey"]);
+                if (d.ContainsKey("keep_awake")) keepAwakeBox.Checked = Convert.ToBoolean(d["keep_awake"]);
             }
             catch { }
+            loaded = true;
         }
 
         void SaveConfig()
         {
+            if (!loaded) return; // don't overwrite the file while LoadConfig is still applying it
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath));
                 var d = new Dictionary<string, object>();
                 d["hotkey"] = hotkey;
+                d["keep_awake"] = keepAwakeBox.Checked;
                 File.WriteAllText(ConfigPath, new JavaScriptSerializer().Serialize(d));
             }
             catch { }

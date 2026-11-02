@@ -14,6 +14,7 @@ Add as many click points as you like. Each point is configured independently:
 
 Other things:
 
+- Tick **Keep PC awake while running** for long unattended runs: while clicking, the PC won't sleep or turn the display off, and if there has been no input for a minute the mouse is nudged by 1 pixel and back so the screen saver and inactivity lock don't kick in (remembered between runs)
 - Press **F6** to start/stop, even when the window isn't focused; use **Change hotkey…** to pick another key (remembered between runs)
 - Set up a point in the "New point" panel and click **Add point**; right-click a point to edit, duplicate, remove or reorder it, and double-click it to enable/disable
 - Each point runs on its own timer; the list order only decides which point clicks first when several are due at the same moment
