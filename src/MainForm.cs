@@ -41,6 +41,8 @@ namespace AutoClicker
         bool capturing;
         bool keyWasDown;
         bool loaded;
+        Rectangle savedBounds = Rectangle.Empty; // window position/size from config.json
+        bool savedMaximized;
 
         public MainForm()
         {
@@ -54,6 +56,8 @@ namespace AutoClicker
             BuildLayout();
             BuildMenu();
             LoadConfig();
+            if (IsOnScreen(savedBounds)) StartPosition = FormStartPosition.Manual;
+            else savedBounds = Rectangle.Empty;
             UpdateLabels();
 
             poll.Interval = 50;
@@ -389,6 +393,12 @@ namespace AutoClicker
                     File.ReadAllText(ConfigPath));
                 if (d.ContainsKey("hotkey")) hotkey = Convert.ToInt32(d["hotkey"]);
                 if (d.ContainsKey("keep_awake")) keepAwakeBox.Checked = Convert.ToBoolean(d["keep_awake"]);
+                if (d.ContainsKey("window_x") && d.ContainsKey("window_y") &&
+                    d.ContainsKey("window_width") && d.ContainsKey("window_height"))
+                    savedBounds = new Rectangle(
+                        Convert.ToInt32(d["window_x"]), Convert.ToInt32(d["window_y"]),
+                        Convert.ToInt32(d["window_width"]), Convert.ToInt32(d["window_height"]));
+                if (d.ContainsKey("window_maximized")) savedMaximized = Convert.ToBoolean(d["window_maximized"]);
             }
             catch { }
             loaded = true;
@@ -403,6 +413,11 @@ namespace AutoClicker
                 var d = new Dictionary<string, object>();
                 d["hotkey"] = hotkey;
                 d["keep_awake"] = keepAwakeBox.Checked;
+                // RestoreBounds is the normal-size rectangle when the window is maximized or minimized
+                var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+                d["window_x"] = b.X; d["window_y"] = b.Y;
+                d["window_width"] = b.Width; d["window_height"] = b.Height;
+                d["window_maximized"] = WindowState == FormWindowState.Maximized;
                 File.WriteAllText(ConfigPath, new JavaScriptSerializer().Serialize(d));
             }
             catch { }
@@ -462,8 +477,31 @@ namespace AutoClicker
             }
         }
 
+        /// <summary>
+        /// Restores the saved window position and size. Done here rather than in the constructor
+        /// so it happens after DPI auto-scaling, which would otherwise rescale the saved size.
+        /// </summary>
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            if (savedBounds.IsEmpty) return;
+            Bounds = savedBounds;
+            if (savedMaximized) WindowState = FormWindowState.Maximized;
+        }
+
+        /// <summary>True if the window's title bar would be at least partly on a connected screen.</summary>
+        static bool IsOnScreen(Rectangle b)
+        {
+            if (b.Width <= 0 || b.Height <= 0) return false;
+            var titleBar = new Rectangle(b.X, b.Y, b.Width, 40);
+            foreach (var s in Screen.AllScreens)
+                if (s.WorkingArea.IntersectsWith(titleBar)) return true;
+            return false;
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            SaveConfig(); // remember window position and size
             if (runner != null) runner.Stop();
             base.OnFormClosing(e);
         }

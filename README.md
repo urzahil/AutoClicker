@@ -19,6 +19,7 @@ Other things:
 - Set up a point in the "New point" panel and click **Add point**; right-click a point to edit, duplicate, remove or reorder it, and double-click it to enable/disable
 - Each point runs on its own timer; the list order only decides which point clicks first when several are due at the same moment
 - Save and load your setup as JSON
+- The window reopens where you left it, at the same size (maximised if it was)
 
 ## Usage
 
