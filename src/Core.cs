@@ -38,22 +38,34 @@ namespace AutoClicker
     {
         const uint EsContinuous = 0x80000000, EsSystemRequired = 0x00000001, EsDisplayRequired = 0x00000002;
         const uint MouseMove = 0x0001;
-        public const int IdleThresholdMs = 60000;
+        // The domain lock fires after 15 minutes without input. Nudge after about half that
+        // (7 min 30 s, re-randomised by up to ±20 s each time), checked once a minute, so the
+        // longest possible gap is 7:50 + 1:00 = 8:50 — well inside the limit.
+        public const double CheckSeconds = 60;
+        const int BaseIdleMs = 450000, JitterMs = 20000;
+
+        /// <summary>Picks the idle time that must pass before the next nudge.</summary>
+        public static int NextIdleThresholdMs(Random rnd)
+        {
+            return BaseIdleMs + rnd.Next(-JitterMs, JitterMs + 1);
+        }
 
         public static void Begin() { Native.SetThreadExecutionState(EsContinuous | EsSystemRequired | EsDisplayRequired); }
         public static void End() { Native.SetThreadExecutionState(EsContinuous); }
 
         /// <summary>
-        /// Sends a 1-pixel move and back if there has been no input for a minute. Injected input
+        /// Sends a 1-pixel move and back if there has been no input for thresholdMs. Injected input
         /// resets the inactivity timer behind the "machine inactivity limit" lock and screen saver,
         /// which SetThreadExecutionState alone does not. The cursor normally ends where it started
         /// (pointer acceleration can leave it a pixel off; each click repositions it anyway).
         /// </summary>
-        public static void NudgeIfIdle()
+        /// <returns>true if a nudge was sent.</returns>
+        public static bool NudgeIfIdle(int thresholdMs)
         {
-            if (Native.IdleMs() < IdleThresholdMs) return;
+            if (Native.IdleMs() < (uint)thresholdMs) return false;
             Native.mouse_event(MouseMove, 1, 0, 0, UIntPtr.Zero);
             Native.mouse_event(MouseMove, unchecked((uint)-1), 0, 0, UIntPtr.Zero);
+            return true;
         }
     }
 
@@ -127,12 +139,12 @@ namespace AutoClicker
 
         void Loop()
         {
-            const double NudgeCheckSeconds = 15;
             var sw = Stopwatch.StartNew();
             var due = new double[points.Count];
             for (int i = 0; i < due.Length; i++)
                 due[i] = points[i].Enabled ? 0.5 : double.PositiveInfinity;
-            double nudgeDue = keepAwake ? NudgeCheckSeconds : double.PositiveInfinity;
+            double nudgeDue = keepAwake ? KeepAwake.CheckSeconds : double.PositiveInfinity;
+            int idleThresholdMs = KeepAwake.NextIdleThresholdMs(rnd);
             var handles = new WaitHandle[] { stop, changed };
 
             while (!stop.WaitOne(0))
@@ -147,8 +159,9 @@ namespace AutoClicker
 
                 if (now >= nudgeDue)
                 {
-                    KeepAwake.NudgeIfIdle();
-                    nudgeDue = now + NudgeCheckSeconds;
+                    if (KeepAwake.NudgeIfIdle(idleThresholdMs))
+                        idleThresholdMs = KeepAwake.NextIdleThresholdMs(rnd); // fresh ±20 s for the next one
+                    nudgeDue = now + KeepAwake.CheckSeconds;
                 }
 
                 int next = 0;

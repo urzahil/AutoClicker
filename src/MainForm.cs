@@ -100,7 +100,7 @@ namespace AutoClicker
             keepAwakeBox.Margin = new Padding(12, 0, 0, 0);
             new ToolTip().SetToolTip(keepAwakeBox,
                 "Stops sleep, the screen saver and the inactivity lock while clicking.\n" +
-                "If there has been no input for a minute, the mouse is nudged by 1 pixel and back.");
+                "After about 7½ minutes without input (±20 s), the mouse is nudged by 1 pixel and back.");
             keepAwakeBox.CheckedChanged += delegate { SaveConfig(); };
             var load = new Button { Text = "Load…", AutoSize = true };
             listButtons.Add(load); // loading replaces the list, so lock it while running
