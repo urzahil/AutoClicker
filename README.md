@@ -1,4 +1,4 @@
-# AutoClicker
+# Snap
 
 A simple multi-point autoclicker for Windows. It's a native app (C#, WinForms): a single ~155 KB `.exe`, nothing to install.
 
@@ -23,7 +23,7 @@ Other things:
 
 ## Usage
 
-Download `AutoClicker.exe` from the [Releases](../../releases) page and run it. It needs the .NET Framework 4.8, which is built into Windows 10 and 11.
+Download `Snap.exe` from the [Releases](../../releases) page and run it. It needs the .NET Framework 4.8, which is built into Windows 10 and 11.
 
 ## Building
 
@@ -33,7 +33,7 @@ No SDK or Visual Studio needed, just the C# compiler that ships with Windows:
 powershell -ExecutionPolicy Bypass -File src\build.ps1
 ```
 
-The result is `dist\AutoClicker.exe`.
+The result is `dist\Snap.exe`.
 
 ## Python version
 
@@ -42,7 +42,8 @@ The original Python/tkinter version (releases up to v1.2.0) is kept in [`python/
 ## Notes
 
 - The mouse cursor moves to each point before clicking.
-- To click inside apps running as administrator, run AutoClicker as administrator too.
+- To click inside apps running as administrator, run Snap as administrator too.
+- Settings are kept in `%APPDATA%\Snap\config.json`. Snap was previously called AutoClicker; settings saved under that name are picked up automatically on first run.
 - Use responsibly and respect the terms of any software or game you use it with.
 
 ## License
