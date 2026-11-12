@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace AutoClicker
+namespace Snap
 {
     static class Native
     {
