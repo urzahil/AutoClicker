@@ -32,6 +32,22 @@ class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long), ("mouseData", ctypes.c_ulong),
+                ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class INPUT(ctypes.Structure):
+    # only the MOUSEINPUT member of the union: it is the largest, so the size is right
+    _fields_ = [("type", ctypes.c_ulong), ("mi", MOUSEINPUT)]
+
+
+user32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int)
+user32.SendInput.restype = ctypes.c_uint
+MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_ABSOLUTE = 0x0001, 0x4000, 0x8000
+
+
 EVENTS = {  # button -> (down flag, up flag)
     "Left": (0x0002, 0x0004),
     "Right": (0x0008, 0x0010),
@@ -63,15 +79,37 @@ def cursor_pos():
     return p.x, p.y
 
 
+def send_mouse(flags, dx=0, dy=0):
+    """Inject one mouse event through SendInput; False if it was blocked."""
+    inp = INPUT(type=0, mi=MOUSEINPUT(dx=dx, dy=dy, dwFlags=flags))  # INPUT_MOUSE
+    return user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT)) == 1
+
+
+def _normalize(v, origin, size):
+    # absolute coordinates span 0..65535 across the virtual desktop and Windows maps them back
+    # with floor(n * size / 65536), so round up to land exactly on the requested pixel
+    if size <= 0:
+        return 0
+    return max(0, min(65535, ((v - origin) * 65536 + size - 1) // size))
+
+
+def move_to(x, y):
+    """Move the cursor as real mouse input, so the target app gets a mouse-move and hit-tests
+    the next click at the new position (SetCursorPos only jumps the cursor)."""
+    gm = user32.GetSystemMetrics
+    return send_mouse(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                      _normalize(int(x), gm(76), gm(78)), _normalize(int(y), gm(77), gm(79)))
+
+
 def click(x, y, button, double):
-    user32.SetCursorPos(int(x), int(y))
+    move_to(x, y)
     time.sleep(0.03)  # let the move settle so the click lands at the new position
     down, up = EVENTS[button]
     n = 2 if double else 1
     for i in range(n):
-        user32.mouse_event(down, 0, 0, 0, 0)
+        send_mouse(down)
         time.sleep(0.04)  # hold briefly; many apps ignore zero-length presses
-        user32.mouse_event(up, 0, 0, 0, 0)
+        send_mouse(up)
         if i < n - 1:
             time.sleep(0.06)
 

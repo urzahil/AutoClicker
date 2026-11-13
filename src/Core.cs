@@ -8,8 +8,8 @@ namespace Snap
 {
     static class Native
     {
-        [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-        [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+        [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint count, Input[] inputs, int size);
+        [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
         [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
         [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint ms);
         [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
@@ -17,6 +17,54 @@ namespace Snap
 
         [StructLayout(LayoutKind.Sequential)]
         struct LastInputInfo { public uint Size; public uint Time; }
+
+        // INPUT with only the MOUSEINPUT member of its union: MOUSEINPUT is the union's largest
+        // member, and its pointer-sized field gives the same layout and size on x86 and x64.
+        [StructLayout(LayoutKind.Sequential)]
+        struct Input { public uint Type; public MouseInput Mouse; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MouseInput
+        {
+            public int Dx, Dy;
+            public uint MouseData, Flags, Time;
+            public UIntPtr ExtraInfo;
+        }
+
+        public const uint MouseMove = 0x0001, MouseAbsolute = 0x8000, MouseVirtualDesk = 0x4000;
+        const int SmXVirtualScreen = 76, SmYVirtualScreen = 77, SmCxVirtualScreen = 78, SmCyVirtualScreen = 79;
+
+        /// <summary>Injects one mouse event through SendInput; false if it was blocked.</summary>
+        public static bool SendMouse(uint flags, int dx, int dy)
+        {
+            var input = new Input[1];
+            input[0].Type = 0; // INPUT_MOUSE
+            input[0].Mouse.Dx = dx;
+            input[0].Mouse.Dy = dy;
+            input[0].Mouse.Flags = flags;
+            return SendInput(1, input, Marshal.SizeOf(typeof(Input))) == 1;
+        }
+
+        /// <summary>
+        /// Moves the cursor to a screen pixel as real mouse input, so the target app receives a
+        /// mouse-move and hit-tests the following click at the new position (SetCursorPos only
+        /// jumps the cursor, and apps that track the pointer through their own input never see it).
+        /// </summary>
+        public static bool MoveTo(int x, int y)
+        {
+            return SendMouse(MouseMove | MouseAbsolute | MouseVirtualDesk,
+                Normalize(x, GetSystemMetrics(SmXVirtualScreen), GetSystemMetrics(SmCxVirtualScreen)),
+                Normalize(y, GetSystemMetrics(SmYVirtualScreen), GetSystemMetrics(SmCyVirtualScreen)));
+        }
+
+        // Absolute coordinates span 0..65535 across the virtual desktop and Windows maps them back
+        // with floor(n * size / 65536), so round up to land exactly on the requested pixel.
+        static int Normalize(int v, int origin, int size)
+        {
+            if (size <= 0) return 0;
+            long n = ((long)(v - origin) * 65536 + size - 1) / size;
+            return (int)Math.Max(0, Math.Min(65535, n));
+        }
 
         public static bool IsDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
@@ -37,7 +85,6 @@ namespace Snap
     static class KeepAwake
     {
         const uint EsContinuous = 0x80000000, EsSystemRequired = 0x00000001, EsDisplayRequired = 0x00000002;
-        const uint MouseMove = 0x0001;
         // The domain lock fires after 15 minutes without input. Nudge after about half that
         // (7 min 30 s, re-randomised by up to ±20 s each time), checked once a minute, so the
         // longest possible gap is 7:50 + 1:00 = 8:50 — well inside the limit.
@@ -63,8 +110,8 @@ namespace Snap
         public static bool NudgeIfIdle(int thresholdMs)
         {
             if (Native.IdleMs() < (uint)thresholdMs) return false;
-            Native.mouse_event(MouseMove, 1, 0, 0, UIntPtr.Zero);
-            Native.mouse_event(MouseMove, unchecked((uint)-1), 0, 0, UIntPtr.Zero);
+            Native.SendMouse(Native.MouseMove, 1, 0);
+            Native.SendMouse(Native.MouseMove, -1, 0);
             return true;
         }
     }
@@ -196,14 +243,14 @@ namespace Snap
             }
             // Apps hit-test a click at the cursor position they last processed, and many ignore
             // a press/release pair with no gap, so let the move settle and hold the button briefly.
-            Native.SetCursorPos(p.X, p.Y);
+            Native.MoveTo(p.X, p.Y);
             Thread.Sleep(30);
             int n = p.ClickType == "Double" ? 2 : 1;
             for (int i = 0; i < n; i++)
             {
-                Native.mouse_event(down, 0, 0, 0, UIntPtr.Zero);
+                Native.SendMouse(down, 0, 0);
                 Thread.Sleep(40);
-                Native.mouse_event(up, 0, 0, 0, UIntPtr.Zero);
+                Native.SendMouse(up, 0, 0);
                 if (i < n - 1) Thread.Sleep(60);
             }
         }
