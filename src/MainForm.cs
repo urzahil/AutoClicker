@@ -48,7 +48,7 @@ namespace Snap
 
         public MainForm()
         {
-            Text = "Snap";
+            Text = "Snap " + AppInfo.Version;
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Dpi;

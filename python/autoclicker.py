@@ -5,6 +5,8 @@ click type. After every click the next delay is  interval + uniform(-offset, +of
 A global hotkey (F6 by default, changeable) starts/stops clicking, even when the
 window is not focused.
 """
+__version__ = "2.3.0"
+
 import ctypes
 import json
 import os
@@ -331,7 +333,7 @@ class EditDialog(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("AutoClicker")
+        self.title(f"AutoClicker {__version__}")
         self.geometry("760x520")
         self.minsize(700, 480)
         self.points: list[ClickPoint] = []
