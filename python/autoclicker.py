@@ -101,7 +101,8 @@ def move_to(x, y):
                       _normalize(int(x), gm(76), gm(78)), _normalize(int(y), gm(77), gm(79)))
 
 
-def click(x, y, button, double):
+def click(x, y, button, double, return_cursor=False):
+    old = cursor_pos() if return_cursor else None
     move_to(x, y)
     time.sleep(0.03)  # let the move settle so the click lands at the new position
     down, up = EVENTS[button]
@@ -112,6 +113,9 @@ def click(x, y, button, double):
         send_mouse(up)
         if i < n - 1:
             time.sleep(0.06)
+    if old:
+        time.sleep(0.03)  # let the app handle the release at the click position first
+        move_to(*old)
 
 
 def fmt_interval(ms):
@@ -139,8 +143,9 @@ class ClickPoint:
 class Clicker(threading.Thread):
     """Runs every enabled point on its own independent schedule."""
 
-    def __init__(self, points, on_stop):
+    def __init__(self, points, on_stop, return_cursor=False):
         super().__init__(daemon=True)
+        self.return_cursor = return_cursor
         # References, not copies, so toggling `enabled` takes effect while running
         # (call notify_changed() afterwards). Other edits are locked while running.
         self.points = list(points)
@@ -175,7 +180,7 @@ class Clicker(threading.Thread):
                 self.wake.wait(timeout)
                 continue  # woke up early, or the enabled set changed: re-evaluate
             p = self.points[nxt]
-            click(p.x, p.y, p.button, p.click_type == "Double")
+            click(p.x, p.y, p.button, p.click_type == "Double", self.return_cursor)
             due[nxt] = time.perf_counter() - t0 + p.next_delay()
         self.on_stop()
 
@@ -338,7 +343,9 @@ class App(tk.Tk):
         self.capturing = False
         try:
             with open(CONFIG) as fh:
-                self.hotkey = int(json.load(fh)["hotkey"])
+                cfg = json.load(fh)
+            self.hotkey = int(cfg.get("hotkey", VK_F6))
+            self.return_cursor.set(bool(cfg.get("return_cursor", False)))
         except Exception:
             pass
         self._update_hotkey_labels()
@@ -355,6 +362,10 @@ class App(tk.Tk):
         self.status.pack(side="left", padx=12)
         self.hotkey_btn = ttk.Button(top, command=self._capture_hotkey)
         self.hotkey_btn.pack(side="left")
+        self.return_cursor = tk.BooleanVar(value=False)
+        self.return_box = ttk.Checkbutton(top, text="Return cursor after each click",
+                                          variable=self.return_cursor, command=self._save_config)
+        self.return_box.pack(side="left", padx=12)
         ttk.Button(top, text="Save…", command=self._save).pack(side="right")
         self.load_btn = ttk.Button(top, text="Load…", command=self._load)
         self.load_btn.pack(side="right", padx=4)
@@ -476,7 +487,8 @@ class App(tk.Tk):
         if not any(p.enabled for p in self.points):
             messagebox.showinfo("Nothing to do", "Add or enable at least one point.")
             return
-        self.runner = Clicker(self.points, lambda: self.after(0, self._stopped))
+        self.runner = Clicker(self.points, lambda: self.after(0, self._stopped),
+                              self.return_cursor.get())
         self.runner.start()
         self.start_btn.config(text=f"Stop ({vk_name(self.hotkey)})")
         self.status.config(text="Running…")
@@ -491,7 +503,7 @@ class App(tk.Tk):
     def _lock(self, locked):
         self.form.set_locked(locked)
         # loading replaces the list, so lock it while running too
-        for b in self.list_buttons + [self.load_btn]:
+        for b in self.list_buttons + [self.load_btn, self.return_box]:
             b.state(["disabled"] if locked else ["!disabled"])
 
     def _update_hotkey_labels(self):
@@ -528,12 +540,15 @@ class App(tk.Tk):
         self.hotkey_btn.state(["!disabled"])
         self._update_hotkey_labels()
         if save:
-            try:
-                os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
-                with open(CONFIG, "w") as fh:
-                    json.dump({"hotkey": self.hotkey}, fh)
-            except OSError:
-                pass
+            self._save_config()
+
+    def _save_config(self):
+        try:
+            os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+            with open(CONFIG, "w") as fh:
+                json.dump({"hotkey": self.hotkey, "return_cursor": self.return_cursor.get()}, fh)
+        except OSError:
+            pass
 
     # ---- persistence
     def _save(self):
