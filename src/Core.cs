@@ -1,11 +1,25 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 
+// shown in the exe's file properties
+[assembly: AssemblyTitle("Snap")]
+[assembly: AssemblyProduct("Snap")]
+[assembly: AssemblyVersion(Snap.AppInfo.Version + ".0")]
+[assembly: AssemblyFileVersion(Snap.AppInfo.Version + ".0")]
+[assembly: AssemblyInformationalVersion(Snap.AppInfo.Version)]
+
 namespace Snap
 {
+    static class AppInfo
+    {
+        /// <summary>The release version: change it here (and only here) for each release.</summary>
+        public const string Version = "2.3.0";
+    }
+
     static class Native
     {
         [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint count, Input[] inputs, int size);
