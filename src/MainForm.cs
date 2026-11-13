@@ -33,6 +33,7 @@ namespace Snap
         readonly Button startBtn = new Button();
         readonly Button hotkeyBtn = new Button();
         readonly Label status = new Label();
+        readonly ToolTip statusTip = new ToolTip();
         readonly CheckBox keepAwakeBox = new CheckBox();
         readonly CheckBox returnCursorBox = new CheckBox();
         readonly List<Button> listButtons = new List<Button>();
@@ -307,17 +308,28 @@ namespace Snap
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            runner = new Clicker(points, keepAwakeBox.Checked, returnCursorBox.Checked, delegate { BeginInvoke(new Action(Stopped)); });
+            runner = new Clicker(points, keepAwakeBox.Checked, returnCursorBox.Checked,
+                delegate { BeginInvoke(new Action(Stopped)); },
+                delegate(string problem) { BeginInvoke(new Action(delegate { ShowProblem(problem); })); });
+            statusTip.SetToolTip(status, null);
             runner.Start();
             status.Text = "Running…";
             SetLocked(true);
             UpdateLabels();
         }
 
+        /// <summary>Flags a problem the clicker hit; the details go in the status tooltip.</summary>
+        void ShowProblem(string problem)
+        {
+            if (runner != null) status.Text = "Running – move blocked";
+            statusTip.SetToolTip(status, problem);
+        }
+
         void Stopped()
         {
             runner = null;
-            status.Text = "Stopped";
+            status.Text = string.IsNullOrEmpty(statusTip.GetToolTip(status))
+                ? "Stopped" : "Stopped – move was blocked";
             SetLocked(false);
             UpdateLabels();
         }

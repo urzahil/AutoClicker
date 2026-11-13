@@ -23,7 +23,7 @@ try:
 except Exception:
     ctypes.windll.user32.SetProcessDPIAware()
 
-user32 = ctypes.windll.user32
+user32 = ctypes.WinDLL("user32", use_last_error=True)  # so SendInput errors can be read
 try:
     ctypes.windll.winmm.timeBeginPeriod(1)  # 1 ms timer resolution
 except Exception:
@@ -103,10 +103,28 @@ def move_to(x, y):
                       _normalize(int(x), gm(76), gm(78)), _normalize(int(y), gm(77), gm(79)))
 
 
+def move_and_check(x, y):
+    """Move with SendInput, then check where the cursor really is. If the move didn't land
+    (input blocked or overridden), fall back to SetCursorPos and return what went wrong."""
+    x, y = int(x), int(y)
+    sent = move_to(x, y)
+    error = ctypes.get_last_error()
+    # let the move settle: the cursor only updates once Windows has processed the input,
+    # and apps hit-test a click at the cursor position they last processed
+    time.sleep(0.03)
+    cx, cy = cursor_pos()
+    if (cx, cy) == (x, y):
+        return None
+    user32.SetCursorPos(x, y)
+    how = "accepted the input" if sent else f"failed with error {error}"
+    return (f"SendInput didn't move the cursor to ({x}, {y}): it was at ({cx}, {cy}). "
+            f"SendInput {how}. Moved it with SetCursorPos instead; clicks may still be blocked.")
+
+
 def click(x, y, button, double, return_cursor=False):
+    """Click at (x, y); returns a problem description if the move had to fall back, else None."""
     old = cursor_pos() if return_cursor else None
-    move_to(x, y)
-    time.sleep(0.03)  # let the move settle so the click lands at the new position
+    problem = move_and_check(x, y)
     down, up = EVENTS[button]
     n = 2 if double else 1
     for i in range(n):
@@ -117,7 +135,8 @@ def click(x, y, button, double, return_cursor=False):
             time.sleep(0.06)
     if old:
         time.sleep(0.03)  # let the app handle the release at the click position first
-        move_to(*old)
+        problem = move_and_check(*old) or problem
+    return problem
 
 
 def fmt_interval(ms):
@@ -145,8 +164,10 @@ class ClickPoint:
 class Clicker(threading.Thread):
     """Runs every enabled point on its own independent schedule."""
 
-    def __init__(self, points, on_stop, return_cursor=False):
+    def __init__(self, points, on_stop, return_cursor=False, on_problem=None):
         super().__init__(daemon=True)
+        self.on_problem = on_problem
+        self.problem_reported = False
         self.return_cursor = return_cursor
         # References, not copies, so toggling `enabled` takes effect while running
         # (call notify_changed() afterwards). Other edits are locked while running.
@@ -182,7 +203,10 @@ class Clicker(threading.Thread):
                 self.wake.wait(timeout)
                 continue  # woke up early, or the enabled set changed: re-evaluate
             p = self.points[nxt]
-            click(p.x, p.y, p.button, p.click_type == "Double", self.return_cursor)
+            problem = click(p.x, p.y, p.button, p.click_type == "Double", self.return_cursor)
+            if problem and self.on_problem and not self.problem_reported:
+                self.problem_reported = True  # once per run
+                self.on_problem(problem)
             due[nxt] = time.perf_counter() - t0 + p.next_delay()
         self.on_stop()
 
@@ -338,6 +362,7 @@ class App(tk.Tk):
         self.minsize(700, 480)
         self.points: list[ClickPoint] = []
         self.runner = None
+        self.problem = None  # set when the clicker reports a blocked mouse move
         self.f6_was_down = False
 
         self._build()
@@ -489,17 +514,25 @@ class App(tk.Tk):
         if not any(p.enabled for p in self.points):
             messagebox.showinfo("Nothing to do", "Add or enable at least one point.")
             return
+        self.problem = None
         self.runner = Clicker(self.points, lambda: self.after(0, self._stopped),
-                              self.return_cursor.get())
+                              self.return_cursor.get(),
+                              lambda msg: self.after(0, self._show_problem, msg))
         self.runner.start()
         self.start_btn.config(text=f"Stop ({vk_name(self.hotkey)})")
         self.status.config(text="Running…")
         self._lock(True)
 
+    def _show_problem(self, msg):
+        self.problem = msg
+        if self.runner:
+            self.status.config(text="Running – move blocked")
+        messagebox.showwarning("Mouse move blocked", msg)
+
     def _stopped(self):
         self.runner = None
         self.start_btn.config(text=f"Start ({vk_name(self.hotkey)})")
-        self.status.config(text="Stopped")
+        self.status.config(text="Stopped – move was blocked" if self.problem else "Stopped")
         self._lock(False)
 
     def _lock(self, locked):

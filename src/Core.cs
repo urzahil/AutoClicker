@@ -25,6 +25,7 @@ namespace Snap
         [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint count, Input[] inputs, int size);
         [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
         [DllImport("user32.dll")] static extern bool GetCursorPos(out CursorPoint p);
+        [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
         [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
         [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint ms);
         [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
@@ -183,13 +184,17 @@ namespace Snap
         readonly Random rnd = new Random();
         readonly bool keepAwake;
         readonly bool returnCursor;
+        readonly Action<string> onProblem;
+        bool problemReported;
 
         /// <summary>
         /// Keeps references to the points (not copies) so toggling Enabled takes effect while
         /// running; call NotifyChanged() after toggling. Other edits are locked while running.
         /// </summary>
-        public Clicker(IEnumerable<ClickPoint> source, bool keepAwake, bool returnCursor, Action onStopped)
+        public Clicker(IEnumerable<ClickPoint> source, bool keepAwake, bool returnCursor,
+            Action onStopped, Action<string> onProblem)
         {
+            this.onProblem = onProblem;
             points.AddRange(source);
             this.keepAwake = keepAwake;
             this.returnCursor = returnCursor;
@@ -261,7 +266,29 @@ namespace Snap
                 due[next] = sw.Elapsed.TotalSeconds + p.NextDelaySeconds(rnd);
             }
         }
-        static void Click(ClickPoint p, bool returnCursor)
+        /// <summary>
+        /// Moves with SendInput, then checks where the cursor really is. If the move didn't land
+        /// (input blocked or overridden), falls back to SetCursorPos and reports it once per run.
+        /// </summary>
+        void MoveAndCheck(int x, int y)
+        {
+            bool sent = Native.MoveTo(x, y);
+            int error = Marshal.GetLastWin32Error();
+            // let the move settle: the cursor only updates once Windows has processed the input,
+            // and apps hit-test a click at the cursor position they last processed
+            Thread.Sleep(30);
+            int cx, cy;
+            if (!Native.CursorPos(out cx, out cy) || (cx == x && cy == y)) return;
+            Native.SetCursorPos(x, y);
+            if (problemReported) return;
+            problemReported = true;
+            onProblem(string.Format(
+                "SendInput didn't move the cursor to ({0}, {1}): it was at ({2}, {3}). " +
+                "SendInput {4}. Moved it with SetCursorPos instead; clicks may still be blocked.",
+                x, y, cx, cy, sent ? "accepted the input" : "failed with error " + error));
+        }
+
+        void Click(ClickPoint p, bool returnCursor)
         {
             int oldX = 0, oldY = 0;
             bool restore = returnCursor && Native.CursorPos(out oldX, out oldY);
@@ -272,10 +299,8 @@ namespace Snap
                 case "Middle": down = 0x0020; up = 0x0040; break;
                 default: down = 0x0002; up = 0x0004; break;
             }
-            // Apps hit-test a click at the cursor position they last processed, and many ignore
-            // a press/release pair with no gap, so let the move settle and hold the button briefly.
-            Native.MoveTo(p.X, p.Y);
-            Thread.Sleep(30);
+            // many apps ignore a press/release pair with no gap, so hold the button briefly
+            MoveAndCheck(p.X, p.Y);
             int n = p.ClickType == "Double" ? 2 : 1;
             for (int i = 0; i < n; i++)
             {
@@ -288,7 +313,7 @@ namespace Snap
             {
                 // give the app time to handle the release at the click position before moving away
                 Thread.Sleep(30);
-                Native.MoveTo(oldX, oldY);
+                MoveAndCheck(oldX, oldY);
             }
         }
     }
