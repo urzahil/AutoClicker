@@ -34,6 +34,7 @@ namespace Snap
         readonly Button hotkeyBtn = new Button();
         readonly Label status = new Label();
         readonly CheckBox keepAwakeBox = new CheckBox();
+        readonly CheckBox returnCursorBox = new CheckBox();
         readonly List<Button> listButtons = new List<Button>();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
         readonly Timer poll = new Timer();
@@ -107,6 +108,18 @@ namespace Snap
                 "Stops sleep, the screen saver and the inactivity lock while clicking.\n" +
                 "After about 7½ minutes without input (±20 s), the mouse is nudged by 1 pixel and back.");
             keepAwakeBox.CheckedChanged += delegate { SaveConfig(); };
+            returnCursorBox.Text = "Return cursor after each click";
+            returnCursorBox.AutoSize = true;
+            returnCursorBox.Anchor = AnchorStyles.Left;
+            returnCursorBox.Margin = new Padding(12, 0, 0, 0);
+            new ToolTip().SetToolTip(returnCursorBox,
+                "After each click, move the mouse back to where it was before the click.");
+            returnCursorBox.CheckedChanged += delegate { SaveConfig(); };
+            // stacked, so the second checkbox doesn't widen the top row past the window
+            var options = new FlowLayoutPanel { AutoSize = true, WrapContents = false,
+                FlowDirection = FlowDirection.TopDown, Anchor = AnchorStyles.Left, Margin = new Padding(0) };
+            options.Controls.Add(keepAwakeBox);
+            options.Controls.Add(returnCursorBox);
             var load = new Button { Text = "Load…", AutoSize = true };
             listButtons.Add(load); // loading replaces the list, so lock it while running
             var save = new Button { Text = "Save…", AutoSize = true };
@@ -118,7 +131,7 @@ namespace Snap
             top.Controls.Add(startBtn, 0, 0);
             top.Controls.Add(status, 1, 0);
             top.Controls.Add(hotkeyBtn, 2, 0);
-            top.Controls.Add(keepAwakeBox, 3, 0);
+            top.Controls.Add(options, 3, 0);
             top.Controls.Add(right, 4, 0);
             top.Margin = new Padding(8);
             root.Controls.Add(top, 0, 0);
@@ -294,7 +307,7 @@ namespace Snap
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            runner = new Clicker(points, keepAwakeBox.Checked, delegate { BeginInvoke(new Action(Stopped)); });
+            runner = new Clicker(points, keepAwakeBox.Checked, returnCursorBox.Checked, delegate { BeginInvoke(new Action(Stopped)); });
             runner.Start();
             status.Text = "Running…";
             SetLocked(true);
@@ -313,6 +326,7 @@ namespace Snap
         {
             editor.SetLocked(locked);
             keepAwakeBox.Enabled = !locked;
+            returnCursorBox.Enabled = !locked;
             foreach (var b in listButtons) b.Enabled = !locked;
         }
 
@@ -396,6 +410,7 @@ namespace Snap
                     File.ReadAllText(path));
                 if (d.ContainsKey("hotkey")) hotkey = Convert.ToInt32(d["hotkey"]);
                 if (d.ContainsKey("keep_awake")) keepAwakeBox.Checked = Convert.ToBoolean(d["keep_awake"]);
+                if (d.ContainsKey("return_cursor")) returnCursorBox.Checked = Convert.ToBoolean(d["return_cursor"]);
                 if (d.ContainsKey("window_x") && d.ContainsKey("window_y") &&
                     d.ContainsKey("window_width") && d.ContainsKey("window_height"))
                     savedBounds = new Rectangle(
@@ -416,6 +431,7 @@ namespace Snap
                 var d = new Dictionary<string, object>();
                 d["hotkey"] = hotkey;
                 d["keep_awake"] = keepAwakeBox.Checked;
+                d["return_cursor"] = returnCursorBox.Checked;
                 // RestoreBounds is the normal-size rectangle when the window is maximized or minimized
                 var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
                 d["window_x"] = b.X; d["window_y"] = b.Y;

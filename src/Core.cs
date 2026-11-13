@@ -10,6 +10,7 @@ namespace Snap
     {
         [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint count, Input[] inputs, int size);
         [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+        [DllImport("user32.dll")] static extern bool GetCursorPos(out CursorPoint p);
         [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
         [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint ms);
         [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
@@ -17,6 +18,18 @@ namespace Snap
 
         [StructLayout(LayoutKind.Sequential)]
         struct LastInputInfo { public uint Size; public uint Time; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct CursorPoint { public int X, Y; }
+
+        /// <summary>Current cursor position in screen pixels; false if it can't be read.</summary>
+        public static bool CursorPos(out int x, out int y)
+        {
+            CursorPoint p;
+            bool ok = GetCursorPos(out p);
+            x = p.X; y = p.Y;
+            return ok;
+        }
 
         // INPUT with only the MOUSEINPUT member of its union: MOUSEINPUT is the union's largest
         // member, and its pointer-sized field gives the same layout and size on x86 and x64.
@@ -155,15 +168,17 @@ namespace Snap
         readonly Thread thread;
         readonly Random rnd = new Random();
         readonly bool keepAwake;
+        readonly bool returnCursor;
 
         /// <summary>
         /// Keeps references to the points (not copies) so toggling Enabled takes effect while
         /// running; call NotifyChanged() after toggling. Other edits are locked while running.
         /// </summary>
-        public Clicker(IEnumerable<ClickPoint> source, bool keepAwake, Action onStopped)
+        public Clicker(IEnumerable<ClickPoint> source, bool keepAwake, bool returnCursor, Action onStopped)
         {
             points.AddRange(source);
             this.keepAwake = keepAwake;
+            this.returnCursor = returnCursor;
             this.onStopped = onStopped;
             thread = new Thread(Run);
             thread.IsBackground = true;
@@ -228,12 +243,14 @@ namespace Snap
                 }
 
                 var p = points[next];
-                Click(p);
+                Click(p, returnCursor);
                 due[next] = sw.Elapsed.TotalSeconds + p.NextDelaySeconds(rnd);
             }
         }
-        static void Click(ClickPoint p)
+        static void Click(ClickPoint p, bool returnCursor)
         {
+            int oldX = 0, oldY = 0;
+            bool restore = returnCursor && Native.CursorPos(out oldX, out oldY);
             uint down, up;
             switch (p.Button)
             {
@@ -252,6 +269,12 @@ namespace Snap
                 Thread.Sleep(40);
                 Native.SendMouse(up, 0, 0);
                 if (i < n - 1) Thread.Sleep(60);
+            }
+            if (restore)
+            {
+                // give the app time to handle the release at the click position before moving away
+                Thread.Sleep(30);
+                Native.MoveTo(oldX, oldY);
             }
         }
     }
