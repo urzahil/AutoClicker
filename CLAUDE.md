@@ -7,16 +7,15 @@ Name each branch after what it changes: a `feature/` or `fix/` prefix, then a sh
 - `feature/` for new functionality, e.g. `feature/export-to-csv`
 - `fix/` for bug fixes, e.g. `fix/crash-on-empty-input`
 
-This applies even when a session was started on an auto-generated branch name: create a properly named branch and work there.
+This applies even when a session was started on, or told to push to, an auto-generated branch name: create a properly named branch, work there and push there instead of the assigned one.
 
-Just follow this rule silently: do not remind the user about it or point out that the session started on an auto-generated branch name.
+Don't lecture the user about this rule, but do name the branch you pushed to when you report the push.
 
 ## Model assignment rules
 
-- Architecture decisions and reviews: use Opus.
-- Implementation tasks (new features, refactors): use Sonnet.
-- Simple edits, formatting, renaming: use Haiku.
-- Security-sensitive changes: always escalate to Opus for review.
+When you hand work to a subagent, choose its model by the task: Opus for architecture decisions and reviews, Sonnet for implementation (new features, refactors), Haiku for simple edits, formatting and renaming. This rule doesn't require you to delegate work you can do directly.
+
+Security-sensitive changes always get a review by an Opus model; if this session isn't running on Opus, run that review in an Opus subagent.
 
 ## Pull requests
 
