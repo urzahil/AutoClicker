@@ -55,6 +55,7 @@ namespace Snap
         {
             Text = "Snap " + AppInfo.Version;
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            ShowInTaskbar = false; // Snap lives in the system tray only
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(780, 480);
@@ -226,9 +227,10 @@ namespace Snap
             {
                 if (e.Button == MouseButtons.Left) RestoreFromTray();
             };
+            tray.Visible = true;
         }
 
-        /// <summary>Minimising hides the window from the taskbar and shows the tray icon instead.</summary>
+        /// <summary>Minimising hides the window; the tray icon brings it back.</summary>
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
@@ -236,7 +238,6 @@ namespace Snap
             {
                 inTray = true;
                 Hide();
-                tray.Visible = true;
             }
             else if (WindowState != FormWindowState.Minimized)
             {
@@ -246,12 +247,13 @@ namespace Snap
 
         void RestoreFromTray()
         {
-            if (!inTray) return;
-            Show();
-            WindowState = stateBeforeTray;
-            inTray = false; // only now, so the resize events above don't send it straight back
-            Activate();
-            tray.Visible = false;
+            if (inTray)
+            {
+                Show();
+                WindowState = stateBeforeTray;
+                inTray = false; // only now, so the resize events above don't send it straight back
+            }
+            Activate(); // also brings an already open window to the front
         }
 
         // --------------------------------------------------------- list handling
