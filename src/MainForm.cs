@@ -38,6 +38,11 @@ namespace Snap
         readonly List<Button> listButtons = new List<Button>();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
         readonly Timer poll = new Timer();
+        readonly NotifyIcon tray = new NotifyIcon();
+        readonly ContextMenuStrip trayMenu = new ContextMenuStrip();
+        ToolStripMenuItem trayToggle;
+        FormWindowState stateBeforeTray = FormWindowState.Normal;
+        bool inTray;
         Clicker runner;
         int hotkey = VkF6;
         bool capturing;
@@ -50,6 +55,7 @@ namespace Snap
         {
             Text = "Snap " + AppInfo.Version;
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            ShowInTaskbar = false; // Snap lives in the system tray only
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(780, 480);
@@ -57,6 +63,7 @@ namespace Snap
 
             BuildLayout();
             BuildMenu();
+            BuildTray();
             LoadConfig();
             if (IsOnScreen(savedBounds)) StartPosition = FormStartPosition.Manual;
             else savedBounds = Rectangle.Empty;
@@ -203,6 +210,52 @@ namespace Snap
             menu.Items.Add("Move down", null, delegate { MovePoint(1); });
         }
 
+        // ------------------------------------------------------------ tray icon
+        void BuildTray()
+        {
+            tray.Icon = Icon;
+            tray.Text = "Snap";
+            var show = new ToolStripMenuItem("Show Snap", null, delegate { RestoreFromTray(); });
+            show.Font = new Font(show.Font, FontStyle.Bold); // default action, same as clicking the icon
+            trayMenu.Items.Add(show);
+            trayToggle = new ToolStripMenuItem("Start", null, delegate { Toggle(); });
+            trayMenu.Items.Add(trayToggle);
+            trayMenu.Items.Add(new ToolStripSeparator());
+            trayMenu.Items.Add("Exit", null, delegate { Close(); });
+            tray.ContextMenuStrip = trayMenu;
+            tray.MouseClick += delegate(object s, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left) RestoreFromTray();
+            };
+            tray.Visible = true;
+        }
+
+        /// <summary>Minimising hides the window; the tray icon brings it back.</summary>
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (WindowState == FormWindowState.Minimized && !inTray)
+            {
+                inTray = true;
+                Hide();
+            }
+            else if (WindowState != FormWindowState.Minimized)
+            {
+                stateBeforeTray = WindowState; // so restoring brings back a maximised window as maximised
+            }
+        }
+
+        void RestoreFromTray()
+        {
+            if (inTray)
+            {
+                Show();
+                WindowState = stateBeforeTray;
+                inTray = false; // only now, so the resize events above don't send it straight back
+            }
+            Activate(); // also brings an already open window to the front
+        }
+
         // --------------------------------------------------------- list handling
         int Selected
         {
@@ -334,6 +387,8 @@ namespace Snap
         void UpdateLabels()
         {
             startBtn.Text = (runner != null ? "Stop" : "Start") + " (" + VkName(hotkey) + ")";
+            trayToggle.Text = startBtn.Text;
+            tray.Text = "Snap – " + (runner != null ? "running" : "stopped");
         }
 
         void BeginCapture()
@@ -436,7 +491,9 @@ namespace Snap
                 var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
                 d["window_x"] = b.X; d["window_y"] = b.Y;
                 d["window_width"] = b.Width; d["window_height"] = b.Height;
-                d["window_maximized"] = WindowState == FormWindowState.Maximized;
+                d["window_maximized"] = WindowState == FormWindowState.Minimized
+                    ? stateBeforeTray == FormWindowState.Maximized
+                    : WindowState == FormWindowState.Maximized;
                 File.WriteAllText(ConfigPath, new JavaScriptSerializer().Serialize(d));
             }
             catch { }
@@ -522,7 +579,14 @@ namespace Snap
         {
             SaveConfig(); // remember window position and size
             if (runner != null) runner.Stop();
+            tray.Visible = false; // otherwise the icon lingers in the tray until hovered
             base.OnFormClosing(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { tray.Dispose(); trayMenu.Dispose(); }
+            base.Dispose(disposing);
         }
     }
 

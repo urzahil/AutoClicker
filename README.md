@@ -20,6 +20,7 @@ Other things:
 - Each point runs on its own timer; the list order only decides which point clicks first when several are due at the same moment
 - Save and load your setup as JSON
 - The window reopens where you left it, at the same size (maximised if it was)
+- Snap shows an icon in the system tray instead of a taskbar button. Minimising hides the window; click the tray icon to bring it back, or right-click it to start/stop or exit. The hotkey keeps working while the window is hidden
 
 ## Usage
 
