@@ -1,14 +1,39 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 
 namespace Snap
 {
+    /// <summary>
+    /// Tracks whether a modal dialog, message box or the location picker is open, so the global
+    /// hotkey doesn't start the clicker underneath it. Everything runs on the UI thread.
+    /// </summary>
+    static class ModalState
+    {
+        public static int Depth;
+
+        public static DialogResult Show(Func<DialogResult> show)
+        {
+            Depth++;
+            try { return show(); }
+            finally { Depth--; }
+        }
+
+        public static DialogResult Message(IWin32Window owner, string text, string caption,
+            MessageBoxButtons buttons, MessageBoxIcon icon)
+        {
+            Depth++;
+            try { return MessageBox.Show(owner, text, caption, buttons, icon); }
+            finally { Depth--; }
+        }
+    }
+
     /// <summary>Fields for one point; used for the "New point" panel and the edit dialog.</summary>
     class PointEditor : UserControl
     {
         readonly NumericUpDown x = Num(-32768, 65535), y = Num(-32768, 65535);
-        readonly NumericUpDown min = Num(0, 1440), sec = Num(0, 59), offset = Num(0, 3600000);
+        readonly NumericUpDown min = Num(0, 1440), sec = Num(0, 59), ms = Num(0, 999), offset = Num(0, 3600000);
         readonly ComboBox button = Combo("Left", "Right", "Middle");
         readonly ComboBox type = Combo("Single", "Double");
         readonly Button pick = new Button();
@@ -35,7 +60,8 @@ namespace Snap
             t.SetColumnSpan(pick, 2);
 
             t.Controls.Add(Lbl("Interval"), 0, 1);
-            t.Controls.Add(Row(min, Lbl("min"), sec, Lbl("sec")), 1, 1);
+            sec.Width = 48; ms.Width = 56;
+            t.Controls.Add(Row(min, Lbl("min"), sec, Lbl("sec"), ms, Lbl("ms")), 1, 1);
             t.Controls.Add(Lbl("Click type"), 2, 1);
             t.Controls.Add(type, 3, 1);
             t.Controls.Add(Lbl("± Random offset"), 4, 1);
@@ -103,21 +129,22 @@ namespace Snap
             return Math.Max(n.Minimum, Math.Min(n.Maximum, v));
         }
 
-        /// <summary>Current field values; null (with a message shown) if the interval is 0.</summary>
+        /// <summary>Current field values; null (with a message shown) if the interval is too short.</summary>
         public ClickPoint Read()
         {
-            int interval = ((int)min.Value * 60 + (int)sec.Value) * 1000;
-            if (interval < 1000)
+            int interval = ((int)min.Value * 60 + (int)sec.Value) * 1000 + (int)ms.Value;
+            if (interval < ClickPoint.MinIntervalMs)
             {
-                MessageBox.Show(FindForm(), "The interval must be at least 1 sec.",
+                ModalState.Message(FindForm(),
+                    "The interval must be at least " + ClickPoint.MinIntervalMs + " ms.",
                     "Invalid value", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return null;
             }
             var p = new ClickPoint();
             p.X = (int)x.Value; p.Y = (int)y.Value;
             p.IntervalMs = interval; p.OffsetMs = (int)offset.Value;
-            p.Button = (string)button.SelectedItem;
-            p.ClickType = (string)type.SelectedItem;
+            p.Button = ClickPoint.CanonButton((string)button.SelectedItem);
+            p.ClickType = ClickPoint.CanonClickType((string)type.SelectedItem);
             return p;
         }
 
@@ -126,17 +153,19 @@ namespace Snap
             set
             {
                 x.Value = Clamp(x, value.X); y.Value = Clamp(y, value.Y);
-                int secs = value.IntervalMs / 1000;
-                min.Value = Math.Min(min.Maximum, secs / 60); sec.Value = secs % 60;
+                int total = Math.Max(0, value.IntervalMs);
+                min.Value = Clamp(min, total / 60000);
+                sec.Value = Clamp(sec, (total % 60000) / 1000);
+                ms.Value = Clamp(ms, total % 1000);
                 offset.Value = Clamp(offset, value.OffsetMs);
-                button.SelectedItem = value.Button;
-                type.SelectedItem = value.ClickType;
+                button.SelectedItem = ClickPoint.CanonButton(value.Button);
+                type.SelectedItem = ClickPoint.CanonClickType(value.ClickType);
             }
         }
 
         public void SetLocked(bool locked)
         {
-            foreach (Control c in new Control[] { x, y, min, sec, offset, button, type, pick })
+            foreach (Control c in new Control[] { x, y, min, sec, ms, offset, button, type, pick })
                 c.Enabled = !locked;
         }
     }
@@ -145,10 +174,22 @@ namespace Snap
     class PickOverlay : Form
     {
         readonly Action<Point> callback;
+        // Snap's own windows are made invisible while picking, so they can't cover the target.
+        readonly List<KeyValuePair<Form, double>> hidden = new List<KeyValuePair<Form, double>>();
+        readonly Font bannerFont = new Font("Segoe UI", 18);
+        readonly Label banner = new Label();
+        readonly Label coords = new Label();
 
         public static void Pick(Form owner, Action<Point> callback)
         {
-            new PickOverlay(callback).Show(owner);
+            var overlay = new PickOverlay(callback);
+            for (Form f = owner; f != null; f = f.Owner)
+            {
+                overlay.hidden.Add(new KeyValuePair<Form, double>(f, f.Opacity));
+                f.Opacity = 0;
+            }
+            ModalState.Depth++;
+            overlay.Show(owner);
         }
 
         PickOverlay(Action<Point> callback)
@@ -164,17 +205,49 @@ namespace Snap
             Cursor = Cursors.Cross;
             KeyPreview = true;
 
-            var l = new Label();
-            l.Text = "Left-click to pick a location  (Esc to cancel)";
-            l.ForeColor = Color.White;
-            l.Font = new Font("Segoe UI", 18);
-            l.AutoSize = true;
-            l.Location = new Point(Width / 2 - 280, Height / 10);
-            Controls.Add(l);
-            l.MouseDown += OnMouse;
+            banner.Text = "Left-click to pick a location  (Esc to cancel)";
+            banner.ForeColor = Color.White;
+            banner.Font = bannerFont;
+            banner.AutoSize = true;
+            Controls.Add(banner);
+            coords.ForeColor = Color.White;
+            coords.Font = bannerFont;
+            coords.AutoSize = true;
+            Controls.Add(coords);
+
+            banner.MouseDown += OnMouse;
+            coords.MouseDown += OnMouse;
             MouseDown += OnMouse;
+            banner.MouseMove += delegate { TrackCursor(); };
+            MouseMove += delegate { TrackCursor(); };
             KeyDown += delegate(object s, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) Close(); };
-            Shown += delegate { Activate(); };
+            Shown += delegate { PositionBanner(); TrackCursor(); Activate(); };
+            FormClosed += delegate { Restore(); };
+        }
+
+        /// <summary>Centres the instructions on the screen the cursor is on, not on the whole desktop.</summary>
+        void PositionBanner()
+        {
+            var screen = Screen.FromPoint(Cursor.Position).Bounds;
+            banner.Location = new Point(
+                screen.Left - Left + (screen.Width - banner.PreferredSize.Width) / 2,
+                screen.Top - Top + screen.Height / 10);
+        }
+
+        /// <summary>Shows the live (X, Y) next to the cursor.</summary>
+        void TrackCursor()
+        {
+            var c = Cursor.Position;
+            var at = PointToClient(c);
+            coords.Text = c.X + ", " + c.Y;
+            coords.Location = new Point(at.X + 20, at.Y + 24);
+        }
+
+        void Restore()
+        {
+            foreach (var h in hidden) h.Key.Opacity = h.Value;
+            hidden.Clear();
+            ModalState.Depth--;
         }
 
         void OnMouse(object s, MouseEventArgs e)
@@ -183,6 +256,12 @@ namespace Snap
             var p = Cursor.Position;
             Close();
             callback(p);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing) bannerFont.Dispose();
         }
     }
 }

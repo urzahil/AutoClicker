@@ -137,6 +137,34 @@ class ClickPoint:
     click_type: str = "Single"
     enabled: bool = True
 
+    @classmethod
+    def from_dict(cls, d):
+        """Build a point from JSON data: unknown fields are ignored, missing or unreadable
+        ones fall back to the defaults, and values are clamped to what the app can handle."""
+        if not isinstance(d, dict) or "x" not in d or "y" not in d:
+            raise ValueError("A point is missing its \"x\" or \"y\" value.")
+
+        def num(key, default, lo, hi):
+            try:
+                v = int(d.get(key, default))
+            except (TypeError, ValueError, OverflowError):
+                v = default
+            return max(lo, min(hi, v))
+
+        def canon(value, allowed):
+            if isinstance(value, str):
+                for a in allowed:
+                    if a.lower() == value.strip().lower():
+                        return a
+            return allowed[0]
+
+        return cls(x=num("x", 0, -32768, 65535), y=num("y", 0, -32768, 65535),
+                   interval_ms=num("interval_ms", 1000, 50, 1440 * 60000 + 59999),
+                   offset_ms=num("offset_ms", 0, 0, 3600000),
+                   button=canon(d.get("button"), list(EVENTS)),
+                   click_type=canon(d.get("click_type"), ["Single", "Double"]),
+                   enabled=bool(d.get("enabled", True)))
+
     def next_delay(self):
         d = self.interval_ms + random.uniform(-self.offset_ms, self.offset_ms)
         return max(1.0, d) / 1000.0
@@ -163,6 +191,12 @@ class Clicker(threading.Thread):
         self.wake.set()
 
     def run(self):
+        try:
+            self._loop()
+        finally:
+            self.on_stop()  # always, or an error here leaves the window locked in "Running…"
+
+    def _loop(self):
         inf = float("inf")
         t0 = time.perf_counter()
         due = [0.5 if p.enabled else inf for p in self.points]
@@ -184,7 +218,6 @@ class Clicker(threading.Thread):
             p = self.points[nxt]
             click(p.x, p.y, p.button, p.click_type == "Double", self.return_cursor)
             due[nxt] = time.perf_counter() - t0 + p.next_delay()
-        self.on_stop()
 
 
 # --------------------------------------------------------------------- UI ---
@@ -566,7 +599,7 @@ class App(tk.Tk):
             return
         try:
             with open(f) as fh:
-                self.points = [ClickPoint(**d) for d in json.load(fh)]
+                self.points = [ClickPoint.from_dict(d) for d in json.load(fh)]
         except Exception as e:
             messagebox.showerror("Load failed", str(e))
             return
