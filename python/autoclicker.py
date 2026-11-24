@@ -9,6 +9,7 @@ __version__ = "2.3.0"
 
 import ctypes
 import json
+import math
 import os
 import random
 import threading
@@ -133,6 +134,8 @@ class ClickPoint:
     y: int = 0
     interval_ms: int = 1000
     offset_ms: int = 0
+    jitter_px: int = 0  # edited in the Snap app; applied and preserved here
+    label: str = ""
     button: str = "Left"
     click_type: str = "Single"
     enabled: bool = True
@@ -161,6 +164,8 @@ class ClickPoint:
         return cls(x=num("x", 0, -32768, 65535), y=num("y", 0, -32768, 65535),
                    interval_ms=num("interval_ms", 1000, 50, 1440 * 60000 + 59999),
                    offset_ms=num("offset_ms", 0, 0, 3600000),
+                   jitter_px=num("jitter_px", 0, 0, 500),
+                   label=str(d.get("label") or "").strip()[:40],
                    button=canon(d.get("button"), list(EVENTS)),
                    click_type=canon(d.get("click_type"), ["Single", "Double"]),
                    enabled=bool(d.get("enabled", True)))
@@ -216,7 +221,11 @@ class Clicker(threading.Thread):
                 self.wake.wait(timeout)
                 continue  # woke up early, or the enabled set changed: re-evaluate
             p = self.points[nxt]
-            click(p.x, p.y, p.button, p.click_type == "Double", self.return_cursor)
+            x, y = p.x, p.y
+            if p.jitter_px:  # uniform over a disc around the point
+                angle, radius = random.uniform(0, 2 * math.pi), p.jitter_px * math.sqrt(random.random())
+                x, y = x + round(radius * math.cos(angle)), y + round(radius * math.sin(angle))
+            click(x, y, p.button, p.click_type == "Double", self.return_cursor)
             due[nxt] = time.perf_counter() - t0 + p.next_delay()
 
 
@@ -483,6 +492,7 @@ class App(tk.Tk):
 
         def save(new):
             new.enabled = self.points[i].enabled
+            new.label, new.jitter_px = self.points[i].label, self.points[i].jitter_px  # not editable here
             self.points[i] = new
             self._refresh(i)
 

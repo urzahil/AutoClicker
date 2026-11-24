@@ -150,6 +150,7 @@ namespace Snap
         public const int MaxIntervalMs = 1440 * 60000 + 59999; // what the editor can show
         public const int MaxOffsetMs = 3600000;
         public const int MinCoord = -32768, MaxCoord = 65535;
+        public const int MaxJitterPx = 500, MaxLabelLength = 40;
         static readonly string[] Buttons = { "Left", "Right", "Middle" };
         static readonly string[] ClickTypes = { "Single", "Double" };
 
@@ -157,6 +158,8 @@ namespace Snap
         public int Y = 500;
         public int IntervalMs = 1000;
         public int OffsetMs = 0;
+        public int JitterPx = 0; // each click lands at a random spot within this radius of X, Y
+        public string Label = "";
         public string Button = "Left";
         public string ClickType = "Single";
         public bool Enabled = true;
@@ -184,6 +187,9 @@ namespace Snap
             Y = Math.Max(MinCoord, Math.Min(MaxCoord, Y));
             IntervalMs = Math.Max(MinIntervalMs, Math.Min(MaxIntervalMs, IntervalMs));
             OffsetMs = Math.Max(0, Math.Min(MaxOffsetMs, OffsetMs));
+            JitterPx = Math.Max(0, Math.Min(MaxJitterPx, JitterPx));
+            Label = (Label ?? "").Trim();
+            if (Label.Length > MaxLabelLength) Label = Label.Substring(0, MaxLabelLength);
             Button = CanonButton(Button);
             ClickType = CanonClickType(ClickType);
         }
@@ -216,6 +222,8 @@ namespace Snap
             p.Y = ReadInt(d, "y", p.Y);
             p.IntervalMs = ReadInt(d, "interval_ms", p.IntervalMs);
             p.OffsetMs = ReadInt(d, "offset_ms", p.OffsetMs);
+            p.JitterPx = ReadInt(d, "jitter_px", p.JitterPx);
+            p.Label = ReadString(d, "label");
             p.Button = ReadString(d, "button");
             p.ClickType = ReadString(d, "click_type");
             object en;
@@ -234,6 +242,7 @@ namespace Snap
             var d = new Dictionary<string, object>();
             d["x"] = X; d["y"] = Y;
             d["interval_ms"] = IntervalMs; d["offset_ms"] = OffsetMs;
+            d["jitter_px"] = JitterPx; d["label"] = Label;
             d["button"] = Button; d["click_type"] = ClickType; d["enabled"] = Enabled;
             return d;
         }
@@ -267,19 +276,28 @@ namespace Snap
         readonly Random rnd = new Random();
         readonly bool keepAwake;
         readonly bool returnCursor;
+        readonly int maxClicks;
+        readonly int maxMinutes;
         bool blockedReported;
+        volatile string stopReason;
+
+        /// <summary>Why the run ended by itself ("click limit" / "time limit"); null if it was stopped manually.</summary>
+        public string StopReason { get { return stopReason; } }
 
         /// <summary>
         /// Keeps references to the points (not copies) so toggling Enabled takes effect while
         /// running; call NotifyChanged() after toggling. Other edits are locked while running.
         /// onBlocked (at most once per run) and onStopped are called on the clicker thread.
+        /// maxClicks / maxMinutes of 0 mean "no limit".
         /// </summary>
         public Clicker(IEnumerable<ClickPoint> source, bool keepAwake, bool returnCursor,
-            Action onBlocked, Action onStopped)
+            int maxClicks, int maxMinutes, Action onBlocked, Action onStopped)
         {
             points.AddRange(source);
             this.keepAwake = keepAwake;
             this.returnCursor = returnCursor;
+            this.maxClicks = maxClicks;
+            this.maxMinutes = maxMinutes;
             this.onBlocked = onBlocked;
             this.onStopped = onStopped;
             thread = new Thread(Run);
@@ -332,11 +350,14 @@ namespace Snap
             double nudgeDue = keepAwake ? KeepAwake.CheckSeconds : double.PositiveInfinity;
             int idleThresholdMs = KeepAwake.NextIdleThresholdMs(rnd);
             var handles = new WaitHandle[] { stop, changed };
+            double endAt = maxMinutes > 0 ? maxMinutes * 60.0 : double.PositiveInfinity;
+            int clicks = 0;
 
             while (!stop.WaitOne(0))
             {
                 // pick up points that were enabled/disabled since the last pass
                 double now = sw.Elapsed.TotalSeconds;
+                if (now >= endAt) { stopReason = "time limit"; break; }
                 for (int i = 0; i < due.Length; i++)
                 {
                     if (!points[i].Enabled) due[i] = double.PositiveInfinity;
@@ -354,6 +375,7 @@ namespace Snap
                 for (int i = 1; i < due.Length; i++) if (due[i] < due[next]) next = i;
 
                 double nextAt = due.Length > 0 ? Math.Min(due[next], nudgeDue) : nudgeDue;
+                nextAt = Math.Min(nextAt, endAt);
                 int timeout = Timeout.Infinite;
                 if (!double.IsPositiveInfinity(nextAt))
                 {
@@ -375,6 +397,8 @@ namespace Snap
                 // Schedule from the time the click was due, not from when it finished, so the
                 // time Click() takes doesn't add drift; never schedule in the past.
                 due[next] = Math.Max(sw.Elapsed.TotalSeconds, due[next] + p.NextDelaySeconds(rnd));
+                clicks++;
+                if (maxClicks > 0 && clicks >= maxClicks) { stopReason = "click limit"; break; }
             }
         }
 
@@ -393,10 +417,18 @@ namespace Snap
                 case "Middle": down = 0x0020; up = 0x0040; break;
                 default: down = 0x0002; up = 0x0004; break;
             }
+            int tx = p.X, ty = p.Y;
+            if (p.JitterPx > 0)
+            {
+                // uniform over a disc: the square root keeps the points from bunching at the centre
+                double angle = rnd.NextDouble() * 2 * Math.PI, radius = p.JitterPx * Math.Sqrt(rnd.NextDouble());
+                tx += (int)Math.Round(radius * Math.Cos(angle));
+                ty += (int)Math.Round(radius * Math.Sin(angle));
+            }
             bool ok = true, aborted = false;
             // Apps hit-test a click at the cursor position they last processed, and many ignore
             // a press/release pair with no gap, so let the move settle and hold the button briefly.
-            if (!Native.MoveTo(p.X, p.Y)) ok = false;
+            if (!Native.MoveTo(tx, ty)) ok = false;
             else if (stop.WaitOne(30)) aborted = true;
             int n = p.ClickType == "Double" ? 2 : 1;
             for (int i = 0; i < n && ok && !aborted; i++)

@@ -52,6 +52,9 @@ namespace Snap
         readonly Label status = new Label();
         readonly CheckBox keepAwakeBox = new CheckBox();
         readonly CheckBox returnCursorBox = new CheckBox();
+        readonly NumericUpDown stopClicks = new NumericUpDown();
+        readonly NumericUpDown stopMinutes = new NumericUpDown();
+        readonly FlowLayoutPanel stopBar = new FlowLayoutPanel();
         readonly List<Button> listButtons = new List<Button>();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
         readonly ToolTip tips = new ToolTip();
@@ -101,9 +104,10 @@ namespace Snap
             var root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
             root.ColumnCount = 1;
-            root.RowCount = 4;
+            root.RowCount = 5;
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
@@ -171,8 +175,8 @@ namespace Snap
             list.MultiSelect = false;
             list.HideSelection = false;
             list.GridLines = true;
-            string[] cols = { "#", "On", "X", "Y", "Button", "Type", "Interval", "± Offset (ms)" };
-            int[] widths = { 40, 45, 70, 70, 80, 80, 120, 120 };
+            string[] cols = { "#", "On", "Label", "X", "Y", "Button", "Type", "Interval", "± Offset (ms)", "± Jitter (px)" };
+            int[] widths = { 40, 45, 110, 60, 60, 70, 70, 100, 100, 90 };
             for (int i = 0; i < cols.Length; i++)
                 list.Columns.Add(cols[i], widths[i], HorizontalAlignment.Center);
             list.DoubleClick += delegate { ToggleEnabled(); };
@@ -181,13 +185,28 @@ namespace Snap
             list.Margin = new Padding(8, 0, 8, 0);
             root.Controls.Add(list, 0, 1);
 
+            // stop conditions
+            stopClicks.Minimum = 0; stopClicks.Maximum = 1000000; stopClicks.Width = 75;
+            stopMinutes.Minimum = 0; stopMinutes.Maximum = 10080; stopMinutes.Width = 65;
+            stopClicks.ValueChanged += delegate { SaveConfig(); };
+            stopMinutes.ValueChanged += delegate { SaveConfig(); };
+            stopBar.AutoSize = true;
+            stopBar.WrapContents = false;
+            stopBar.Margin = new Padding(8, 6, 8, 0);
+            stopBar.Controls.Add(StopLabel("Stop automatically after"));
+            stopBar.Controls.Add(stopClicks);
+            stopBar.Controls.Add(StopLabel("clicks or"));
+            stopBar.Controls.Add(stopMinutes);
+            stopBar.Controls.Add(StopLabel("minutes (0 = no limit); whichever comes first"));
+            root.Controls.Add(stopBar, 0, 2);
+
             // new point panel
             var box = new GroupBox { Text = "New point", AutoSize = true, Dock = DockStyle.Fill };
             box.Margin = new Padding(8);
             box.Padding = new Padding(8, 4, 8, 8);
             editor.Dock = DockStyle.Fill;
             box.Controls.Add(editor);
-            root.Controls.Add(box, 0, 2);
+            root.Controls.Add(box, 0, 3);
 
             // buttons
             var bar = new TableLayoutPanel();
@@ -210,7 +229,12 @@ namespace Snap
             bar.Controls.Add(btns, 0, 0);
             bar.Controls.Add(hint, 1, 0);
             bar.Margin = new Padding(8, 0, 8, 8);
-            root.Controls.Add(bar, 0, 3);
+            root.Controls.Add(bar, 0, 4);
+        }
+
+        static Label StopLabel(string text)
+        {
+            return new Label { Text = text, AutoSize = true, Margin = new Padding(4, 6, 4, 0) };
         }
 
         void AddListButton(FlowLayoutPanel parent, string text, Action action)
@@ -293,12 +317,14 @@ namespace Snap
                 var p = points[i];
                 var item = new ListViewItem((i + 1).ToString());
                 item.SubItems.Add(p.Enabled ? "✔" : "—");
+                item.SubItems.Add(p.Label);
                 item.SubItems.Add(p.X.ToString());
                 item.SubItems.Add(p.Y.ToString());
                 item.SubItems.Add(p.Button);
                 item.SubItems.Add(p.ClickType);
                 item.SubItems.Add(ClickPoint.FormatInterval(p.IntervalMs));
                 item.SubItems.Add(p.OffsetMs.ToString());
+                item.SubItems.Add(p.JitterPx.ToString());
                 if (!p.Enabled) item.ForeColor = SystemColors.GrayText;
                 list.Items.Add(item);
             }
@@ -415,6 +441,7 @@ namespace Snap
                 return;
             }
             runner = new Clicker(points, keepAwakeBox.Checked, returnCursorBox.Checked,
+                (int)stopClicks.Value, (int)stopMinutes.Value,
                 delegate { SafeInvoke(ShowBlocked); }, delegate { SafeInvoke(Stopped); });
             runner.Start();
             status.Text = "Running…";
@@ -441,8 +468,9 @@ namespace Snap
         void Stopped()
         {
             if (IsDisposed) return;
+            string reason = runner != null ? runner.StopReason : null;
             runner = null;
-            status.Text = "Stopped";
+            status.Text = reason != null ? "Stopped (" + reason + ")" : "Stopped";
             SetLocked(false);
             UpdateLabels();
         }
@@ -452,6 +480,7 @@ namespace Snap
             editor.SetLocked(locked);
             keepAwakeBox.Enabled = !locked;
             returnCursorBox.Enabled = !locked;
+            stopBar.Enabled = !locked;
             foreach (var b in listButtons) b.Enabled = !locked;
         }
 
@@ -551,6 +580,8 @@ namespace Snap
                 if (d.ContainsKey("hotkey")) hotkey = Convert.ToInt32(d["hotkey"]);
                 if (d.ContainsKey("keep_awake")) keepAwakeBox.Checked = Convert.ToBoolean(d["keep_awake"]);
                 if (d.ContainsKey("return_cursor")) returnCursorBox.Checked = Convert.ToBoolean(d["return_cursor"]);
+                if (d.ContainsKey("stop_clicks")) stopClicks.Value = ClampTo(stopClicks, d["stop_clicks"]);
+                if (d.ContainsKey("stop_minutes")) stopMinutes.Value = ClampTo(stopMinutes, d["stop_minutes"]);
                 if (d.ContainsKey("window_x") && d.ContainsKey("window_y") &&
                     d.ContainsKey("window_width") && d.ContainsKey("window_height"))
                     savedBounds = new Rectangle(
@@ -561,6 +592,11 @@ namespace Snap
             }
             catch { }
             loaded = true;
+        }
+
+        static decimal ClampTo(NumericUpDown n, object value)
+        {
+            return Math.Max(n.Minimum, Math.Min(n.Maximum, Convert.ToDecimal(value)));
         }
 
         /// <summary>The working list from the last session; unreadable entries are skipped.</summary>
@@ -586,6 +622,8 @@ namespace Snap
                 d["hotkey"] = hotkey;
                 d["keep_awake"] = keepAwakeBox.Checked;
                 d["return_cursor"] = returnCursorBox.Checked;
+                d["stop_clicks"] = (int)stopClicks.Value;
+                d["stop_minutes"] = (int)stopMinutes.Value;
                 // RestoreBounds is the normal-size rectangle when the window is maximized or minimized
                 var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
                 d["window_x"] = b.X; d["window_y"] = b.Y;

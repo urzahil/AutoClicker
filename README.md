@@ -11,9 +11,12 @@ Add as many click points as you like. Each point is configured independently:
 - **Random offset** – ± milliseconds, re-rolled after every click (next delay = interval + random(−offset, +offset))
 - **Mouse button** – left, right or middle
 - **Click type** – single or double
+- **Label** – an optional name (e.g. "Confirm") shown in the list
+- **± Jitter** – each click lands at a random spot within this many pixels of the location (0 = exact)
 
 Other things:
 
+- **Stop automatically after** N clicks or N minutes (0 = no limit, whichever comes first) for unattended runs (remembered between runs)
 - Tick **Keep PC awake while running** for long unattended runs: while clicking, the PC won't sleep or turn the display off, and after about 7½ minutes without input (randomised by ±20 seconds, checked once a minute) the mouse is nudged by 1 pixel and back so the screen saver and inactivity lock don't kick in (remembered between runs)
 - Tick **Return cursor after each click** to move the mouse back to where it was after every click (remembered between runs)
 - Press **F6** to start/stop, even when the window isn't focused; use **Change hotkey…** to pick another key (remembered between runs). The hotkey won't start clicking while a dialog or the location picker is open, and while Snap's own window has focus only F-keys, Pause and Scroll Lock start it, so ordinary keys can't trigger it while you type. Stopping always works
@@ -39,7 +42,7 @@ The result is `dist\Snap.exe`. The script exits with the compiler's exit code, s
 
 ## Python version
 
-The original Python/tkinter version is kept in [`python/`](python/) (currently 2.3.0; releases up to v1.2.0 were built from it). It is maintained separately and doesn't have every feature of the native app. Setups saved by either version load in the other.
+The original Python/tkinter version is kept in [`python/`](python/) (currently 2.3.0; releases up to v1.2.0 were built from it). It is maintained separately and doesn't have every feature of the native app: it applies and preserves point labels and jitter but can't edit them, and has no stop conditions. Setups saved by either version load in the other.
 
 ## Notes
 

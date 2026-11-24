@@ -33,7 +33,9 @@ namespace Snap
     class PointEditor : UserControl
     {
         readonly NumericUpDown x = Num(-32768, 65535), y = Num(-32768, 65535);
-        readonly NumericUpDown min = Num(0, 1440), sec = Num(0, 59), ms = Num(0, 999), offset = Num(0, 3600000);
+        readonly NumericUpDown min = Num(0, 1440), sec = Num(0, 59), ms = Num(0, 999), offset = Num(0, 3600000),
+            jitter = Num(0, ClickPoint.MaxJitterPx);
+        readonly TextBox label = new TextBox();
         readonly ComboBox button = Combo("Left", "Right", "Middle");
         readonly ComboBox type = Combo("Single", "Double");
         readonly Button pick = new Button();
@@ -46,7 +48,7 @@ namespace Snap
             var t = new TableLayoutPanel();
             t.AutoSize = true;
             t.ColumnCount = 6;
-            t.RowCount = 2;
+            t.RowCount = 3;
             Controls.Add(t);
 
             t.Controls.Add(Lbl("Location"), 0, 0);
@@ -66,6 +68,14 @@ namespace Snap
             t.Controls.Add(type, 3, 1);
             t.Controls.Add(Lbl("± Random offset"), 4, 1);
             t.Controls.Add(Row(offset, Lbl("ms")), 5, 1);
+
+            label.MaxLength = ClickPoint.MaxLabelLength;
+            label.Width = 190;
+            label.Anchor = AnchorStyles.Left;
+            t.Controls.Add(Lbl("Label"), 0, 2);
+            t.Controls.Add(label, 1, 2);
+            t.Controls.Add(Lbl("± Jitter"), 2, 2);
+            t.Controls.Add(Row(jitter, Lbl("px")), 3, 2);
 
             Value = new ClickPoint();
         }
@@ -143,6 +153,7 @@ namespace Snap
             var p = new ClickPoint();
             p.X = (int)x.Value; p.Y = (int)y.Value;
             p.IntervalMs = interval; p.OffsetMs = (int)offset.Value;
+            p.JitterPx = (int)jitter.Value; p.Label = label.Text.Trim();
             p.Button = ClickPoint.CanonButton((string)button.SelectedItem);
             p.ClickType = ClickPoint.CanonClickType((string)type.SelectedItem);
             return p;
@@ -158,6 +169,8 @@ namespace Snap
                 sec.Value = Clamp(sec, (total % 60000) / 1000);
                 ms.Value = Clamp(ms, total % 1000);
                 offset.Value = Clamp(offset, value.OffsetMs);
+                jitter.Value = Clamp(jitter, value.JitterPx);
+                label.Text = value.Label ?? "";
                 button.SelectedItem = ClickPoint.CanonButton(value.Button);
                 type.SelectedItem = ClickPoint.CanonClickType(value.ClickType);
             }
@@ -165,7 +178,7 @@ namespace Snap
 
         public void SetLocked(bool locked)
         {
-            foreach (Control c in new Control[] { x, y, min, sec, ms, offset, button, type, pick })
+            foreach (Control c in new Control[] { x, y, min, sec, ms, offset, jitter, label, button, type, pick })
                 c.Enabled = !locked;
         }
     }
