@@ -9,13 +9,30 @@ namespace Snap
 {
     static class Program
     {
+        const string InstanceName = @"Local\SnapAutoClicker";
+
         [STAThread]
         static void Main()
         {
-            Native.timeBeginPeriod(1); // 1 ms timer resolution for accurate intervals
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            // Snap has no taskbar button, so a second launch would otherwise start a second,
+            // invisible copy fighting over the hotkey and config.json. Instead, ask the running
+            // copy to show its window and exit. The event is created first so it always exists.
+            using (var showEvent = new System.Threading.EventWaitHandle(false,
+                System.Threading.EventResetMode.AutoReset, InstanceName + ".Show"))
+            {
+                bool first;
+                using (new System.Threading.Mutex(true, InstanceName, out first))
+                {
+                    if (!first) { showEvent.Set(); return; }
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    var form = new MainForm();
+                    var wait = System.Threading.ThreadPool.RegisterWaitForSingleObject(showEvent,
+                        delegate { form.RequestShow(); }, null, System.Threading.Timeout.Infinite, false);
+                    try { Application.Run(form); }
+                    finally { wait.Unregister(null); }
+                }
+            }
         }
     }
 
@@ -35,8 +52,12 @@ namespace Snap
         readonly Label status = new Label();
         readonly CheckBox keepAwakeBox = new CheckBox();
         readonly CheckBox returnCursorBox = new CheckBox();
+        readonly NumericUpDown stopClicks = new NumericUpDown();
+        readonly NumericUpDown stopMinutes = new NumericUpDown();
+        readonly FlowLayoutPanel stopBar = new FlowLayoutPanel();
         readonly List<Button> listButtons = new List<Button>();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
+        readonly ToolTip tips = new ToolTip();
         readonly Timer poll = new Timer();
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ContextMenuStrip trayMenu = new ContextMenuStrip();
@@ -58,13 +79,16 @@ namespace Snap
             ShowInTaskbar = false; // Snap lives in the system tray only
             Font = SystemFonts.MessageBoxFont;
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(780, 480);
-            MinimumSize = new Size(760, 440);
+            ClientSize = new Size(820, 480);
+            MinimumSize = new Size(800, 440);
+            KeyPreview = true;
+            KeyDown += OnFormKeyDown;
 
             BuildLayout();
             BuildMenu();
             BuildTray();
             LoadConfig();
+            RefreshList(-1);
             if (IsOnScreen(savedBounds)) StartPosition = FormStartPosition.Manual;
             else savedBounds = Rectangle.Empty;
             UpdateLabels();
@@ -80,9 +104,10 @@ namespace Snap
             var root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
             root.ColumnCount = 1;
-            root.RowCount = 4;
+            root.RowCount = 5;
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             Controls.Add(root);
@@ -111,7 +136,7 @@ namespace Snap
             keepAwakeBox.AutoSize = true;
             keepAwakeBox.Anchor = AnchorStyles.Left;
             keepAwakeBox.Margin = new Padding(12, 0, 0, 0);
-            new ToolTip().SetToolTip(keepAwakeBox,
+            tips.SetToolTip(keepAwakeBox,
                 "Stops sleep, the screen saver and the inactivity lock while clicking.\n" +
                 "After about 7½ minutes without input (±20 s), the mouse is nudged by 1 pixel and back.");
             keepAwakeBox.CheckedChanged += delegate { SaveConfig(); };
@@ -119,7 +144,7 @@ namespace Snap
             returnCursorBox.AutoSize = true;
             returnCursorBox.Anchor = AnchorStyles.Left;
             returnCursorBox.Margin = new Padding(12, 0, 0, 0);
-            new ToolTip().SetToolTip(returnCursorBox,
+            tips.SetToolTip(returnCursorBox,
                 "After each click, move the mouse back to where it was before the click.");
             returnCursorBox.CheckedChanged += delegate { SaveConfig(); };
             // stacked, so the second checkbox doesn't widen the top row past the window
@@ -150,14 +175,30 @@ namespace Snap
             list.MultiSelect = false;
             list.HideSelection = false;
             list.GridLines = true;
-            string[] cols = { "#", "On", "X", "Y", "Button", "Type", "Interval", "± Offset (ms)" };
-            int[] widths = { 40, 45, 70, 70, 80, 80, 120, 120 };
+            string[] cols = { "#", "On", "Label", "X", "Y", "Button", "Type", "Interval", "± Offset (ms)", "± Jitter (px)" };
+            int[] widths = { 40, 45, 110, 60, 60, 70, 70, 100, 100, 90 };
             for (int i = 0; i < cols.Length; i++)
                 list.Columns.Add(cols[i], widths[i], HorizontalAlignment.Center);
             list.DoubleClick += delegate { ToggleEnabled(); };
+            list.KeyDown += OnListKeyDown;
             list.MouseUp += OnListMouseUp;
             list.Margin = new Padding(8, 0, 8, 0);
             root.Controls.Add(list, 0, 1);
+
+            // stop conditions
+            stopClicks.Minimum = 0; stopClicks.Maximum = 1000000; stopClicks.Width = 75;
+            stopMinutes.Minimum = 0; stopMinutes.Maximum = 10080; stopMinutes.Width = 65;
+            stopClicks.ValueChanged += delegate { SaveConfig(); };
+            stopMinutes.ValueChanged += delegate { SaveConfig(); };
+            stopBar.AutoSize = true;
+            stopBar.WrapContents = false;
+            stopBar.Margin = new Padding(8, 6, 8, 0);
+            stopBar.Controls.Add(StopLabel("Stop automatically after"));
+            stopBar.Controls.Add(stopClicks);
+            stopBar.Controls.Add(StopLabel("clicks or"));
+            stopBar.Controls.Add(stopMinutes);
+            stopBar.Controls.Add(StopLabel("minutes (0 = no limit); whichever comes first"));
+            root.Controls.Add(stopBar, 0, 2);
 
             // new point panel
             var box = new GroupBox { Text = "New point", AutoSize = true, Dock = DockStyle.Fill };
@@ -165,7 +206,7 @@ namespace Snap
             box.Padding = new Padding(8, 4, 8, 8);
             editor.Dock = DockStyle.Fill;
             box.Controls.Add(editor);
-            root.Controls.Add(box, 0, 2);
+            root.Controls.Add(box, 0, 3);
 
             // buttons
             var bar = new TableLayoutPanel();
@@ -181,14 +222,19 @@ namespace Snap
             AddListButton(btns, "Move down", delegate { MovePoint(1); });
             var hint = new Label
             {
-                Text = "Right-click a point to edit it · double-click to enable/disable",
+                Text = "Enter/right-click: edit · Space/double-click: on/off · Del: remove",
                 AutoSize = true,
                 Anchor = AnchorStyles.Right
             };
             bar.Controls.Add(btns, 0, 0);
             bar.Controls.Add(hint, 1, 0);
             bar.Margin = new Padding(8, 0, 8, 8);
-            root.Controls.Add(bar, 0, 3);
+            root.Controls.Add(bar, 0, 4);
+        }
+
+        static Label StopLabel(string text)
+        {
+            return new Label { Text = text, AutoSize = true, Margin = new Padding(4, 6, 4, 0) };
         }
 
         void AddListButton(FlowLayoutPanel parent, string text, Action action)
@@ -271,12 +317,15 @@ namespace Snap
                 var p = points[i];
                 var item = new ListViewItem((i + 1).ToString());
                 item.SubItems.Add(p.Enabled ? "✔" : "—");
+                item.SubItems.Add(p.Label);
                 item.SubItems.Add(p.X.ToString());
                 item.SubItems.Add(p.Y.ToString());
                 item.SubItems.Add(p.Button);
                 item.SubItems.Add(p.ClickType);
                 item.SubItems.Add(ClickPoint.FormatInterval(p.IntervalMs));
                 item.SubItems.Add(p.OffsetMs.ToString());
+                item.SubItems.Add(p.JitterPx.ToString());
+                if (!p.Enabled) item.ForeColor = SystemColors.GrayText;
                 list.Items.Add(item);
             }
             list.EndUpdate();
@@ -285,6 +334,34 @@ namespace Snap
                 list.Items[select].Selected = true;
                 list.Items[select].EnsureVisible();
             }
+        }
+
+        /// <summary>Redraws the list and remembers the points in config.json.</summary>
+        void PointsChanged(int select)
+        {
+            RefreshList(select);
+            SaveConfig();
+        }
+
+        void OnListKeyDown(object sender, KeyEventArgs e)
+        {
+            bool handled = true;
+            if (e.KeyCode == Keys.Space && !e.Control && !e.Alt) ToggleEnabled();
+            else if (runner != null) handled = false; // everything else is locked while running
+            else if (e.KeyCode == Keys.Delete) Remove();
+            else if (e.KeyCode == Keys.Enter) Edit();
+            else if (e.Control && e.KeyCode == Keys.D) Duplicate();
+            else if (e.Alt && e.KeyCode == Keys.Up) MovePoint(-1);
+            else if (e.Alt && e.KeyCode == Keys.Down) MovePoint(1);
+            else handled = false;
+            if (handled) { e.Handled = true; e.SuppressKeyPress = true; }
+        }
+
+        void OnFormKeyDown(object sender, KeyEventArgs e)
+        {
+            if (!e.Control || e.Alt || runner != null) return;
+            if (e.KeyCode == Keys.S) { e.SuppressKeyPress = true; SaveFile(); }
+            else if (e.KeyCode == Keys.O) { e.SuppressKeyPress = true; LoadFile(); }
         }
 
         void OnListMouseUp(object sender, MouseEventArgs e)
@@ -301,7 +378,7 @@ namespace Snap
             var p = editor.Read();
             if (p == null) return;
             points.Add(p);
-            RefreshList(points.Count - 1);
+            PointsChanged(points.Count - 1);
         }
 
         void Edit()
@@ -310,10 +387,10 @@ namespace Snap
             if (i < 0) return;
             using (var dlg = new EditDialog(points[i]))
             {
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                if (ModalState.Show(delegate { return dlg.ShowDialog(this); }) != DialogResult.OK) return;
                 dlg.Result.Enabled = points[i].Enabled;
                 points[i] = dlg.Result;
-                RefreshList(i);
+                PointsChanged(i);
             }
         }
 
@@ -322,7 +399,7 @@ namespace Snap
             int i = Selected;
             if (i < 0) return;
             points.Insert(i + 1, points[i].Clone());
-            RefreshList(i + 1);
+            PointsChanged(i + 1);
         }
 
         void Remove()
@@ -330,7 +407,7 @@ namespace Snap
             int i = Selected;
             if (i < 0) return;
             points.RemoveAt(i);
-            RefreshList(Math.Min(i, points.Count - 1));
+            PointsChanged(Math.Min(i, points.Count - 1));
         }
 
         void MovePoint(int d)
@@ -338,7 +415,7 @@ namespace Snap
             int i = Selected;
             if (i < 0 || i + d < 0 || i + d >= points.Count) return;
             var t = points[i]; points[i] = points[i + d]; points[i + d] = t;
-            RefreshList(i + d);
+            PointsChanged(i + d);
         }
 
         void ToggleEnabled()
@@ -346,7 +423,7 @@ namespace Snap
             int i = Selected;
             if (i < 0) return;
             points[i].Enabled = !points[i].Enabled;
-            RefreshList(i);
+            PointsChanged(i);
             if (runner != null) runner.NotifyChanged(); // takes effect immediately while running
         }
 
@@ -354,23 +431,46 @@ namespace Snap
         void Toggle()
         {
             if (runner != null) { runner.Stop(); return; }
+            // never start underneath a dialog or the location picker: they edit the list or
+            // would be clicked themselves
+            if (ModalState.Depth > 0) return;
             if (!points.Exists(delegate(ClickPoint p) { return p.Enabled; }))
             {
-                MessageBox.Show(this, "Add or enable at least one point.", "Nothing to do",
+                ModalState.Message(this, "Add or enable at least one point.", "Nothing to do",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            runner = new Clicker(points, keepAwakeBox.Checked, returnCursorBox.Checked, delegate { BeginInvoke(new Action(Stopped)); });
+            runner = new Clicker(points, keepAwakeBox.Checked, returnCursorBox.Checked,
+                (int)stopClicks.Value, (int)stopMinutes.Value,
+                delegate { SafeInvoke(ShowBlocked); }, delegate { SafeInvoke(Stopped); });
             runner.Start();
             status.Text = "Running…";
             SetLocked(true);
             UpdateLabels();
         }
 
+        /// <summary>Runs an action on the UI thread; does nothing if the window is already gone.</summary>
+        void SafeInvoke(Action action)
+        {
+            try { if (!IsDisposed && IsHandleCreated) BeginInvoke(action); }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        /// <summary>Called when another running copy asks this one to show itself.</summary>
+        public void RequestShow() { SafeInvoke(RestoreFromTray); }
+
+        void ShowBlocked()
+        {
+            if (runner != null) status.Text = "Running… (clicks blocked – run as admin?)";
+        }
+
         void Stopped()
         {
+            if (IsDisposed) return;
+            string reason = runner != null ? runner.StopReason : null;
             runner = null;
-            status.Text = "Stopped";
+            status.Text = reason != null ? "Stopped (" + reason + ")" : "Stopped";
             SetLocked(false);
             UpdateLabels();
         }
@@ -380,6 +480,7 @@ namespace Snap
             editor.SetLocked(locked);
             keepAwakeBox.Enabled = !locked;
             returnCursorBox.Enabled = !locked;
+            stopBar.Enabled = !locked;
             foreach (var b in listButtons) b.Enabled = !locked;
         }
 
@@ -433,8 +534,21 @@ namespace Snap
                 return;
             }
             bool down = Native.IsDown(hotkey);
-            if (down && !keyWasDown) Toggle();
+            // stopping always works; starting is held back while it could do harm
+            if (down && !keyWasDown && (runner != null || HotkeyAllowed())) Toggle();
             keyWasDown = down;
+        }
+
+        /// <summary>
+        /// False while a dialog or the location picker is open, and while Snap's own window has
+        /// focus and the hotkey is an ordinary key: it would fire while typing coordinates or a
+        /// file name, or alongside the list's own Delete/Enter/Space shortcuts.
+        /// </summary>
+        bool HotkeyAllowed()
+        {
+            if (ModalState.Depth > 0) return false;
+            if (Form.ActiveForm != this) return true; // another app has focus (or Snap is in the tray)
+            return (hotkey >= 0x70 && hotkey <= 0x87) || hotkey == 0x13 || hotkey == 0x91; // F1–F24, Pause, ScrollLock
         }
 
         static string VkName(int vk)
@@ -466,15 +580,36 @@ namespace Snap
                 if (d.ContainsKey("hotkey")) hotkey = Convert.ToInt32(d["hotkey"]);
                 if (d.ContainsKey("keep_awake")) keepAwakeBox.Checked = Convert.ToBoolean(d["keep_awake"]);
                 if (d.ContainsKey("return_cursor")) returnCursorBox.Checked = Convert.ToBoolean(d["return_cursor"]);
+                if (d.ContainsKey("stop_clicks")) stopClicks.Value = ClampTo(stopClicks, d["stop_clicks"]);
+                if (d.ContainsKey("stop_minutes")) stopMinutes.Value = ClampTo(stopMinutes, d["stop_minutes"]);
                 if (d.ContainsKey("window_x") && d.ContainsKey("window_y") &&
                     d.ContainsKey("window_width") && d.ContainsKey("window_height"))
                     savedBounds = new Rectangle(
                         Convert.ToInt32(d["window_x"]), Convert.ToInt32(d["window_y"]),
                         Convert.ToInt32(d["window_width"]), Convert.ToInt32(d["window_height"]));
                 if (d.ContainsKey("window_maximized")) savedMaximized = Convert.ToBoolean(d["window_maximized"]);
+                LoadSavedPoints(d);
             }
             catch { }
             loaded = true;
+        }
+
+        static decimal ClampTo(NumericUpDown n, object value)
+        {
+            return Math.Max(n.Minimum, Math.Min(n.Maximum, Convert.ToDecimal(value)));
+        }
+
+        /// <summary>The working list from the last session; unreadable entries are skipped.</summary>
+        void LoadSavedPoints(Dictionary<string, object> d)
+        {
+            object value;
+            var rows = d.TryGetValue("points", out value) ? value as System.Collections.IEnumerable : null;
+            if (rows == null) return;
+            foreach (object row in rows)
+            {
+                try { points.Add(ClickPoint.FromDictionary(row as Dictionary<string, object>)); }
+                catch (Exception) { }
+            }
         }
 
         void SaveConfig()
@@ -487,6 +622,8 @@ namespace Snap
                 d["hotkey"] = hotkey;
                 d["keep_awake"] = keepAwakeBox.Checked;
                 d["return_cursor"] = returnCursorBox.Checked;
+                d["stop_clicks"] = (int)stopClicks.Value;
+                d["stop_minutes"] = (int)stopMinutes.Value;
                 // RestoreBounds is the normal-size rectangle when the window is maximized or minimized
                 var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
                 d["window_x"] = b.X; d["window_y"] = b.Y;
@@ -494,29 +631,32 @@ namespace Snap
                 d["window_maximized"] = WindowState == FormWindowState.Minimized
                     ? stateBeforeTray == FormWindowState.Maximized
                     : WindowState == FormWindowState.Maximized;
+                var rows = new List<Dictionary<string, object>>();
+                foreach (var p in points) rows.Add(p.ToDictionary());
+                d["points"] = rows;
                 File.WriteAllText(ConfigPath, new JavaScriptSerializer().Serialize(d));
             }
             catch { }
         }
 
-        // Same JSON layout as the original Python version, so saved setups still load.
         void SaveFile()
         {
             using (var dlg = new SaveFileDialog())
             {
                 dlg.Filter = "JSON (*.json)|*.json";
                 dlg.DefaultExt = "json";
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                var rows = new List<Dictionary<string, object>>();
-                foreach (var p in points)
+                if (ModalState.Show(delegate { return dlg.ShowDialog(this); }) != DialogResult.OK) return;
+                try
                 {
-                    var d = new Dictionary<string, object>();
-                    d["x"] = p.X; d["y"] = p.Y;
-                    d["interval_ms"] = p.IntervalMs; d["offset_ms"] = p.OffsetMs;
-                    d["button"] = p.Button; d["click_type"] = p.ClickType; d["enabled"] = p.Enabled;
-                    rows.Add(d);
+                    var rows = new List<Dictionary<string, object>>();
+                    foreach (var p in points) rows.Add(p.ToDictionary());
+                    File.WriteAllText(dlg.FileName, new JavaScriptSerializer().Serialize(rows));
                 }
-                File.WriteAllText(dlg.FileName, new JavaScriptSerializer().Serialize(rows));
+                catch (Exception ex)
+                {
+                    ModalState.Message(this, ex.Message, "Save failed",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
         }
 
@@ -525,29 +665,23 @@ namespace Snap
             using (var dlg = new OpenFileDialog())
             {
                 dlg.Filter = "JSON (*.json)|*.json";
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                if (ModalState.Show(delegate { return dlg.ShowDialog(this); }) != DialogResult.OK) return;
                 try
                 {
                     var rows = new JavaScriptSerializer().Deserialize<List<Dictionary<string, object>>>(
                         File.ReadAllText(dlg.FileName));
-                    var loaded = new List<ClickPoint>();
-                    foreach (var d in rows)
-                    {
-                        var p = new ClickPoint();
-                        p.X = Convert.ToInt32(d["x"]); p.Y = Convert.ToInt32(d["y"]);
-                        p.IntervalMs = Convert.ToInt32(d["interval_ms"]);
-                        p.OffsetMs = Convert.ToInt32(d["offset_ms"]);
-                        p.Button = (string)d["button"]; p.ClickType = (string)d["click_type"];
-                        p.Enabled = Convert.ToBoolean(d["enabled"]);
-                        loaded.Add(p);
-                    }
+                    if (rows == null) throw new FormatException("The file doesn't contain a list of points.");
+                    // FromDictionary clamps every value and canonicalises button and click type
+                    var result = new List<ClickPoint>();
+                    foreach (var d in rows) result.Add(ClickPoint.FromDictionary(d));
+                    if (runner != null) return; // can't happen (locked while running), but never swap the live list
                     points.Clear();
-                    points.AddRange(loaded);
-                    RefreshList(points.Count > 0 ? 0 : -1);
+                    points.AddRange(result);
+                    PointsChanged(points.Count > 0 ? 0 : -1);
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(this, ex.Message, "Load failed",
+                    ModalState.Message(this, ex.Message, "Load failed",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
@@ -565,27 +699,34 @@ namespace Snap
             if (savedMaximized) WindowState = FormWindowState.Maximized;
         }
 
-        /// <summary>True if the window's title bar would be at least partly on a connected screen.</summary>
+        /// <summary>
+        /// True if enough of the window's title bar is on a connected screen to grab it. A mere
+        /// pixel of overlap (the invisible resize border) doesn't count.
+        /// </summary>
         static bool IsOnScreen(Rectangle b)
         {
             if (b.Width <= 0 || b.Height <= 0) return false;
             var titleBar = new Rectangle(b.X, b.Y, b.Width, 40);
             foreach (var s in Screen.AllScreens)
-                if (s.WorkingArea.IntersectsWith(titleBar)) return true;
+            {
+                var visible = Rectangle.Intersect(s.WorkingArea, titleBar);
+                if (visible.Width >= 80 && visible.Height >= 20) return true;
+            }
             return false;
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            SaveConfig(); // remember window position and size
-            if (runner != null) runner.Stop();
+            poll.Stop();
+            SaveConfig(); // remember window position, size and points
+            if (runner != null) runner.StopAndWait(1000); // let the clicker finish before the window goes
             tray.Visible = false; // otherwise the icon lingers in the tray until hovered
             base.OnFormClosing(e);
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { tray.Dispose(); trayMenu.Dispose(); }
+            if (disposing) { poll.Dispose(); tray.Dispose(); trayMenu.Dispose(); menu.Dispose(); tips.Dispose(); }
             base.Dispose(disposing);
         }
     }

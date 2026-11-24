@@ -8,4 +8,4 @@ New-Item -ItemType Directory -Force $out | Out-Null
     /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll `
     /reference:System.Web.Extensions.dll `
     "$PSScriptRoot\Core.cs" "$PSScriptRoot\PointEditor.cs" "$PSScriptRoot\MainForm.cs"
-if ($LASTEXITCODE -eq 0) { Write-Host "Built $out\Snap.exe" }
+if ($LASTEXITCODE -eq 0) { Write-Host "Built $out\Snap.exe" } else { exit $LASTEXITCODE }
