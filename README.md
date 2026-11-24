@@ -38,7 +38,7 @@ No SDK or Visual Studio needed, just the C# compiler that ships with Windows:
 powershell -ExecutionPolicy Bypass -File src\build.ps1
 ```
 
-The result is `dist\Snap.exe`. The script exits with the compiler's exit code, so a failed build fails CI. Every push and pull request is built by GitHub Actions; pushing a `v*` tag also attaches `Snap.exe` and its SHA-256 checksum to the release.
+The result is `dist\Snap.exe`. The script exits with the compiler's exit code, so a failed build fails CI. Every push and pull request is built by GitHub Actions; pushing a version tag such as `2.4.0` (no `v` prefix) also attaches `Snap.exe` and its SHA-256 checksum to the release.
 
 ## Python version
 
