@@ -17,7 +17,7 @@ namespace Snap
     static class AppInfo
     {
         /// <summary>The release version: change it here (and only here) for each release.</summary>
-        public const string Version = "2.4.0";
+        public const string Version = "2.4.1";
     }
 
     static class Native
